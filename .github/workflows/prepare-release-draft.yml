@@ -21,7 +21,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Bump version and update CHANGELOG.MD
+      - name: Bump version and store changelog
         id: changelog
         uses: lidofinance/conventional-changelog-action@v3
         with:

@@ -7,6 +7,7 @@ This workflow creates or updates a release draft for the current application ver
 It should be triggered on a push to the `main` (or your variant) branch.
 Example:
 ```yaml
+name: Prepare release draft
 on:
   push:
     branches:
