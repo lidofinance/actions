@@ -12,7 +12,10 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
-  prepare-draft:
+  prepare-release-draft:
     uses: lidofinance/actions/.github/workflows/prepare-release-draft.yml@main
 ```
