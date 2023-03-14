@@ -1,0 +1,46 @@
+name: Prepare release draft
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: 'Target branch'
+        default: 'main'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release-draft:
+    name: Prepare release draft
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          persist-credentials: false
+
+      - name: Bump version and update CHANGELOG.MD
+        id: changelog
+        uses: lidofinance/conventional-changelog-action@v3
+        with:
+          skip-commit: true
+          skip-version-file: true
+          tag-prefix: ""
+          output-file: "false"
+          git-push: false
+          skip-on-empty: false
+          create-summary: true
+
+      - name: Create or update release draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BODY: ${{ steps.changelog.outputs.clean_changelog }}
+          TAG: ${{ steps.changelog.outputs.tag }}
+          TARGET: ${{ inputs.target }}
+        run: >
+          if gh release view $TAG;
+            then gh release edit $TAG --notes "$BODY" --draft;
+            else gh release create $TAG --target=$TARGET --title $TAG --notes "$BODY" --draft;
+          fi
