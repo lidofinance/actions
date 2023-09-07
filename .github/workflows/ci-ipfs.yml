@@ -4,14 +4,14 @@ on:
   workflow_call:
     inputs:
       ipfs_folder:
-        description: 'IPFS build folder'
-        default: 'out/'
+        description: "IPFS build folder"
+        default: "out/"
         type: string
       W3S_TOKEN:
-        description: 'web3storage token'
+        description: "web3storage token"
         type: string
       GW3_TOKEN:
-        description: 'gateway3 token'
+        description: "gateway3 token"
         type: string
 
 permissions:
@@ -23,12 +23,14 @@ jobs:
     name: Build and deploy
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Install node
         uses: actions/setup-node@v3
         with:
           node-version: 16
-          cache: 'yarn'
+          cache: "yarn"
       - name: Extract branch name
         id: extract_branch
         run: |
@@ -77,6 +79,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BODY: ${{ steps.pinning.outputs.BODY_RESULT }}
           TAG: ${{ steps.vars.outputs.TAG }}
-          TITLE: 'IPFS Pinning ${{ steps.vars.outputs.TAG }} (${{ steps.vars.outputs.DATE }})'
+          TITLE: "IPFS Pinning ${{ steps.vars.outputs.TAG }} (${{ steps.vars.outputs.DATE }})"
           TARGET: ${{ steps.extract_branch.outputs.BRANCH_NAME }}
           FILE_NAME: ${{ steps.zip.outputs.FILE_NAME }}
