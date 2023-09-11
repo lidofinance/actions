@@ -3,73 +3,72 @@ name: Deploy IPFS Base
 on:
   workflow_call:
     inputs:
+      current_branch:
+        description: "Current branch"
+        required: true
+        type: string
       ipfs_folder:
         description: "IPFS build folder"
-        default: "out/"
+        required: true
         type: string
       W3S_TOKEN:
         description: "web3storage token"
+        required: true
         type: string
       GW3_TOKEN:
         description: "gateway3 token"
         type: string
+      is_create_release:
+        description: "Create github release"
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
   deploy-ipfs:
+    env:
+      FILE_NAME: ipfs_source_code.zip
     runs-on: ubuntu-latest
-    name: Build and deploy
+    name: Pin to IPFS
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Install node
-        uses: actions/setup-node@v3
+      - uses: actions/download-artifact@v3
+        id: download
         with:
-          node-version: 16
-          cache: "yarn"
-      - name: Extract branch name
-        id: extract_branch
-        run: |
-          echo "BRANCH_NAME=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
-      - name: Install dependencies
-        run: |
-          yarn install --frozen-lockfile
-      - name: Build
-        run: |
-          yarn build-ipfs
+          name: ${{ inputs.ipfs_folder }}
+          path: ${{ inputs.ipfs_folder }}
       - name: IPFS pinning
         id: pinning
         run: |
-          export BODY_RESULT=`npx -y blumen@0.0.0 deploy $IPFS_FOLDER`
-          echo "$BODY_RESULT"
+          export BODY_RESULT=`npx -y blumen@0.0.0 deploy $PATH_TO_IPFS_CONTENT`
+          echo "$BODY_RESULT" >> $GITHUB_STEP_SUMMARY
           echo "BODY_RESULT<<EOF" >> $GITHUB_OUTPUT   
           echo "$BODY_RESULT" >> $GITHUB_OUTPUT   
           echo "EOF" >> $GITHUB_OUTPUT
         env:
           BLUMEN_W3S_TOKEN: ${{ inputs.W3S_TOKEN }}
           BLUMEN_GW3_TOKEN: ${{ inputs.GW3_TOKEN }}
-          IPFS_FOLDER: ${{ inputs.ipfs_folder }}
+          PATH_TO_IPFS_CONTENT: ${{ inputs.ipfs_folder }}
       - name: Zip
-        if: steps.extract_branch.outputs.BRANCH_NAME == 'main'
+        if: inputs.is_create_release
         id: zip
         run: |
-          zip -r $FILE_NAME $IPFS_FOLDER
-          echo "FILE_NAME=$FILE_NAME" >> $GITHUB_OUTPUT
+          zip -r $FILE_NAME $PATH_TO_IPFS_CONTENT
         env:
-          FILE_NAME: ipfs_source_code.zip
-          IPFS_FOLDER: ${{ inputs.ipfs_folder }}
+          PATH_TO_IPFS_CONTENT: "${{ inputs.ipfs_folder }}/"
       - name: Set output tag and date
-        if: steps.extract_branch.outputs.BRANCH_NAME == 'main'
+        if: inputs.is_create_release
         id: vars
         run: |
           echo "TAG=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
           echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
       - name: Create or update IPFS release draft
-        if: steps.extract_branch.outputs.BRANCH_NAME == 'main'
+        if: inputs.is_create_release
         run: >
           if gh release view $TAG;
             then gh release edit $TAG --notes "$BODY" -t "$TITLE" --draft && gh release upload $TAG $FILE_NAME --clobber;
@@ -80,5 +79,5 @@ jobs:
           BODY: ${{ steps.pinning.outputs.BODY_RESULT }}
           TAG: ${{ steps.vars.outputs.TAG }}
           TITLE: "IPFS Pinning ${{ steps.vars.outputs.TAG }} (${{ steps.vars.outputs.DATE }})"
-          TARGET: ${{ steps.extract_branch.outputs.BRANCH_NAME }}
-          FILE_NAME: ${{ steps.zip.outputs.FILE_NAME }}
+          TARGET: ${{ inputs.current_branch }}
+          FILE_NAME: ${{ env.FILE_NAME }}
