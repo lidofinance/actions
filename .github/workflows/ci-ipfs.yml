@@ -1,0 +1,83 @@
+name: Deploy IPFS Base
+
+on:
+  workflow_call:
+    inputs:
+      current_branch:
+        description: "Current branch"
+        required: true
+        type: string
+      ipfs_folder:
+        description: "IPFS build folder"
+        required: true
+        type: string
+      W3S_TOKEN:
+        description: "web3storage token"
+        required: true
+        type: string
+      GW3_TOKEN:
+        description: "gateway3 token"
+        type: string
+      is_create_release:
+        description: "Create github release"
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  deploy-ipfs:
+    env:
+      FILE_NAME: ipfs_source_code.zip
+    runs-on: ubuntu-latest
+    name: Pin to IPFS
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v3
+        id: download
+        with:
+          name: ${{ inputs.ipfs_folder }}
+          path: ${{ inputs.ipfs_folder }}
+      - name: IPFS pinning
+        id: pinning
+        run: |
+          export BODY_RESULT=`npx -y blumen@0.0.0 deploy $PATH_TO_IPFS_CONTENT`
+          echo "$BODY_RESULT" >> $GITHUB_STEP_SUMMARY
+          echo "BODY_RESULT<<EOF" >> $GITHUB_OUTPUT   
+          echo "$BODY_RESULT" >> $GITHUB_OUTPUT   
+          echo "EOF" >> $GITHUB_OUTPUT
+        env:
+          BLUMEN_W3S_TOKEN: ${{ inputs.W3S_TOKEN }}
+          BLUMEN_GW3_TOKEN: ${{ inputs.GW3_TOKEN }}
+          PATH_TO_IPFS_CONTENT: ${{ inputs.ipfs_folder }}
+      - name: Zip
+        if: inputs.is_create_release
+        id: zip
+        run: |
+          zip -r $FILE_NAME $PATH_TO_IPFS_CONTENT
+        env:
+          PATH_TO_IPFS_CONTENT: "${{ inputs.ipfs_folder }}/"
+      - name: Set output tag and date
+        if: inputs.is_create_release
+        id: vars
+        run: |
+          echo "TAG=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
+          echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+      - name: Create or update IPFS release draft
+        if: inputs.is_create_release
+        run: >
+          if gh release view $TAG;
+            then gh release edit $TAG --notes "$BODY" -t "$TITLE" --draft && gh release upload $TAG $FILE_NAME --clobber;
+            else gh release create $TAG --target=$TARGET -t "$TITLE" --notes "$BODY" --draft && gh release upload $TAG $FILE_NAME;
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BODY: ${{ steps.pinning.outputs.BODY_RESULT }}
+          TAG: ${{ steps.vars.outputs.TAG }}
+          TITLE: "IPFS Pinning ${{ steps.vars.outputs.TAG }} (${{ steps.vars.outputs.DATE }})"
+          TARGET: ${{ inputs.current_branch }}
+          FILE_NAME: ${{ env.FILE_NAME }}
