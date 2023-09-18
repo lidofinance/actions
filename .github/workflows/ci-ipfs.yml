@@ -11,17 +11,17 @@ on:
         description: "IPFS build folder"
         required: true
         type: string
-      W3S_TOKEN:
-        description: "web3storage token"
-        required: true
-        type: string
-      GW3_TOKEN:
-        description: "gateway3 token"
-        type: string
       is_create_release:
         description: "Create github release"
         default: false
         type: boolean
+    secrets:
+      W3S_TOKEN:
+        description: "W3S token"
+        required: true
+      GW3_TOKEN:
+        description: "GW3 token"
+        required: true
 
 permissions:
   contents: write
@@ -51,8 +51,8 @@ jobs:
           echo "$BODY_RESULT" >> $GITHUB_OUTPUT   
           echo "EOF" >> $GITHUB_OUTPUT
         env:
-          BLUMEN_W3S_TOKEN: ${{ inputs.W3S_TOKEN }}
-          BLUMEN_GW3_TOKEN: ${{ inputs.GW3_TOKEN }}
+          BLUMEN_W3S_TOKEN: ${{ secrets.W3S_TOKEN }}
+          BLUMEN_GW3_TOKEN: ${{ secrets.GW3_TOKEN }}
           PATH_TO_IPFS_CONTENT: ${{ inputs.ipfs_folder }}
       - name: Zip
         if: inputs.is_create_release
