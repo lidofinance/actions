@@ -30,6 +30,7 @@ jobs:
     env:
       FILE_NAME: ipfs_source_code.zip
     runs-on: ubuntu-latest
+    environment: IPFS
     name: Pin to IPFS
     steps:
       - name: Checkout
