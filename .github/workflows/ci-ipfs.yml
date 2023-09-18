@@ -17,11 +17,10 @@ on:
         type: boolean
     secrets:
       W3S_TOKEN:
-        description: "W3S token"
+        description: "Web3Storage token"
         required: true
       GW3_TOKEN:
-        description: "GW3 token"
-        required: true
+        description: "Gateway3 token"
 
 permissions:
   contents: write
