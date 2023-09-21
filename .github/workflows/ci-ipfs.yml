@@ -17,10 +17,10 @@ on:
         type: boolean
     secrets:
       W3S_TOKEN:
-        description: "Web3Storage token"
+        description: "web3storage token"
         required: true
       GW3_TOKEN:
-        description: "Gateway3 token"
+        description: "gateway3 token"
 
 permissions:
   contents: write
@@ -71,17 +71,32 @@ jobs:
         run: |
           echo "TAG=`echo $(git describe --abbrev=0 --tags)`" >> $GITHUB_OUTPUT
           echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+      - name: Get release body from existing release
+        if: inputs.is_create_release
+        id: body
+        run: |
+          export EXISTING_BODY=`gh release view $TAG --json body | jq -r '.body'`
+          export EXISTING_TITLE=`gh release view $TAG --json name | jq -r '.name'`
+          echo "EXISTING_BODY<<EOF" >> $GITHUB_OUTPUT   
+          echo "$EXISTING_BODY" >> $GITHUB_OUTPUT   
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "EXISTING_TITLE<<EOF" >> $GITHUB_OUTPUT
+          echo "$EXISTING_TITLE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        env:
+          TAG: ${{ steps.vars.outputs.TAG }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Create or update IPFS release draft
         if: inputs.is_create_release
         run: >
           if gh release view $TAG;
-            then gh release edit $TAG --notes "$BODY" -t "$TITLE" --draft && gh release upload $TAG $FILE_NAME.car $FILE_NAME.zip --clobber;
+            then gh release edit $TAG --notes "$BODY" -t "$TITLE" && gh release upload $TAG $FILE_NAME.car $FILE_NAME.zip --clobber;
             else gh release create $TAG --target=$TARGET -t "$TITLE" --notes "$BODY" --draft && gh release upload $TAG $FILE_NAME.car $FILE_NAME.zip;
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BODY: ${{ steps.pinning.outputs.BODY_RESULT }}
+          BODY: "${{ steps.body.outputs.EXISTING_BODY }}\n\n${{ steps.pinning.outputs.BODY_RESULT }}"
           TAG: ${{ steps.vars.outputs.TAG }}
-          TITLE: "IPFS Pinning ${{ steps.vars.outputs.TAG }} (${{ steps.vars.outputs.DATE }})"
+          TITLE: "IPFS Pinning ${{ steps.body.outputs.EXISTING_TITLE }} (${{ steps.vars.outputs.DATE }})"
           TARGET: ${{ inputs.current_branch }}
           FILE_NAME: ${{ env.FILE_NAME }}
