@@ -97,6 +97,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BODY: "${{ steps.body.outputs.EXISTING_BODY }}\n\n${{ steps.pinning.outputs.BODY_RESULT }}"
           TAG: ${{ steps.vars.outputs.TAG }}
-          TITLE: "IPFS Pinning ${{ steps.body.outputs.EXISTING_TITLE }} (${{ steps.vars.outputs.DATE }})"
+          TITLE: "${{ steps.body.outputs.EXISTING_TITLE }} (IPFS Pinning ${{ steps.vars.outputs.DATE }})"
           TARGET: ${{ inputs.current_branch }}
           FILE_NAME: ${{ env.FILE_NAME }}
