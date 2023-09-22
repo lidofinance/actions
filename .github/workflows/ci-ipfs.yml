@@ -60,10 +60,10 @@ jobs:
         if: inputs.is_create_release
         id: car
         run: |
-          mv $PATH_TO_IPFS_CAR ./$FILE_NAME.car
-          zip -r $FILE_NAME.zip $PATH_TO_IPFS_CONTENT/
+          mv /tmp/$IPFS_CAR_NAME.car ./$FILE_NAME.car
+          zip -r $FILE_NAME.zip $IPFS_CAR_NAME/
         env:
-          PATH_TO_IPFS_CAR: "/tmp/${{ inputs.ipfs_folder }}.car"
+          IPFS_CAR_NAME: ${{ inputs.ipfs_folder }}
           FILE_NAME: ${{ env.FILE_NAME }}
       - name: Set output tag and date
         if: inputs.is_create_release
