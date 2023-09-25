@@ -44,33 +44,45 @@ jobs:
         with:
           name: ${{ inputs.ipfs_folder }}
           path: ${{ inputs.ipfs_folder }}
+      - name: Set output date and last commit
+        id: vars
+        run: |
+          echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          echo "TIME=$(date +'%H:%M:%S')" >> $GITHUB_OUTPUT
+          echo "COMMIT_SHA=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+      - name: Set tag and tag commit
+        if: inputs.is_create_release
+        id: tag
+        run: |
+          export TAG=`echo $(git describe --abbrev=0 --tags)`
+          echo "TAG=`echo $(git describe --abbrev=0 --tags)`" >> $GITHUB_OUTPUT
+          echo "TAG_COMMIT_SHA=$(git rev-parse --short $(git rev-list -n 1 $TAG))" >> "$GITHUB_OUTPUT"
       - name: IPFS pinning
         id: pinning
         run: |
-          export BODY_RESULT=`npx -y blumen@0.0.0 deploy $PATH_TO_IPFS_CONTENT`
+          export BODY_RESULT=`npx -y blumen@0.0.3 deploy $PATH_TO_IPFS_CONTENT --name $IPFS_PIN_NAME`
           echo "$BODY_RESULT" >> $GITHUB_STEP_SUMMARY
           echo "BODY_RESULT<<EOF" >> $GITHUB_OUTPUT   
           echo "$BODY_RESULT" >> $GITHUB_OUTPUT   
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "IPFS_PIN_NAME<<EOF" >> $GITHUB_OUTPUT
+          echo "$IPFS_PIN_NAME" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
         env:
           BLUMEN_W3S_TOKEN: ${{ secrets.W3S_TOKEN }}
           BLUMEN_GW3_TOKEN: ${{ secrets.GW3_TOKEN }}
           PATH_TO_IPFS_CONTENT: ${{ inputs.ipfs_folder }}
+          IPFS_PIN_NAME: "${{ github.event.repository.name }}:${{ steps.tag.outputs.TAG_COMMIT_SHA || steps.vars.outputs.COMMIT_SHA }}(${{ steps.vars.outputs.DATE }}:${{ steps.vars.outputs.TIME }})"
       - name: Create ipfs source code archive
         if: inputs.is_create_release
         id: car
         run: |
-          mv /tmp/$IPFS_CONTENT_NAME.car ./$FILE_NAME.car
+          mv /tmp/$IPFS_PIN_NAME.car ./$FILE_NAME.car
           zip -r $FILE_NAME.zip $IPFS_CONTENT_NAME/
         env:
           IPFS_CONTENT_NAME: ${{ inputs.ipfs_folder }}
           FILE_NAME: ${{ env.FILE_NAME }}
-      - name: Set output tag and date
-        if: inputs.is_create_release
-        id: vars
-        run: |
-          echo "TAG=`echo $(git describe --abbrev=0 --tags)`" >> $GITHUB_OUTPUT
-          echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          IPFS_PIN_NAME: "${{ steps.pinning.outputs.IPFS_PIN_NAME }}"
       - name: Get release body from existing release
         if: inputs.is_create_release
         id: body
@@ -84,7 +96,7 @@ jobs:
           echo "$EXISTING_TITLE" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
         env:
-          TAG: ${{ steps.vars.outputs.TAG }}
+          TAG: ${{ steps.tag.outputs.TAG }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Create or update IPFS release draft
         if: inputs.is_create_release
@@ -96,7 +108,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BODY: "${{ steps.body.outputs.EXISTING_BODY }}\n\n${{ steps.pinning.outputs.BODY_RESULT }}"
-          TAG: ${{ steps.vars.outputs.TAG }}
+          TAG: ${{ steps.tag.outputs.TAG }}
           TITLE: "${{ steps.body.outputs.EXISTING_TITLE }} (IPFS Pinning ${{ steps.vars.outputs.DATE }})"
           TARGET: ${{ inputs.current_branch }}
           FILE_NAME: ${{ env.FILE_NAME }}
