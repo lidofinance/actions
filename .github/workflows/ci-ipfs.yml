@@ -19,10 +19,6 @@ on:
         description: "Tag for relase"
         required: false
         type: string
-      tag_commit_sha:
-        description: "Tag commit sha for release"
-        required: false
-        type: string
     secrets:
       W3S_TOKEN:
         description: "Web3Storage token"
@@ -58,6 +54,9 @@ jobs:
           echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
           echo "TIME=$(date +'%H:%M:%S')" >> $GITHUB_OUTPUT
           echo "COMMIT_SHA=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+          echo "TAG_COMMIT_SHA=$(git rev-parse --short $(git rev-list -n 1 $TAG))" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ inputs.tag }}
       - name: IPFS pinning
         id: pinning
         run: |
