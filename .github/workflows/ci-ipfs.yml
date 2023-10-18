@@ -72,7 +72,7 @@ jobs:
           BLUMEN_W3S_TOKEN: ${{ secrets.W3S_TOKEN }}
           BLUMEN_GW3_TOKEN: ${{ secrets.GW3_TOKEN }}
           PATH_TO_IPFS_CONTENT: ${{ inputs.ipfs_folder }}
-          IPFS_PIN_NAME: "${{ github.event.repository.name }}:${{ inputs.tag_commit_sha || steps.vars.outputs.COMMIT_SHA }}(${{ steps.vars.outputs.DATE }}:${{ steps.vars.outputs.TIME }})"
+          IPFS_PIN_NAME: "${{ github.event.repository.name }}:${{ steps.vars.outputs.TAG_COMMIT_SHA || steps.vars.outputs.COMMIT_SHA }}(${{ steps.vars.outputs.DATE }}:${{ steps.vars.outputs.TIME }})"
       - name: Create ipfs source code archive
         if: inputs.is_create_release
         id: car
