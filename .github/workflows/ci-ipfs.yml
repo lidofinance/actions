@@ -15,6 +15,10 @@ on:
         description: "Create github release"
         default: false
         type: boolean
+      tag:
+        description: "Tag for relase"
+        required: false
+        type: string
     secrets:
       W3S_TOKEN:
         description: "Web3Storage token"
@@ -50,13 +54,9 @@ jobs:
           echo "DATE=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
           echo "TIME=$(date +'%H:%M:%S')" >> $GITHUB_OUTPUT
           echo "COMMIT_SHA=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
-      - name: Set tag and tag commit
-        if: inputs.is_create_release
-        id: tag
-        run: |
-          export TAG=`echo $(git describe --abbrev=0 --tags)`
-          echo "TAG=`echo $(git describe --abbrev=0 --tags)`" >> $GITHUB_OUTPUT
           echo "TAG_COMMIT_SHA=$(git rev-parse --short $(git rev-list -n 1 $TAG))" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ inputs.tag }}
       - name: IPFS pinning
         id: pinning
         run: |
@@ -72,7 +72,7 @@ jobs:
           BLUMEN_W3S_TOKEN: ${{ secrets.W3S_TOKEN }}
           BLUMEN_GW3_TOKEN: ${{ secrets.GW3_TOKEN }}
           PATH_TO_IPFS_CONTENT: ${{ inputs.ipfs_folder }}
-          IPFS_PIN_NAME: "${{ github.event.repository.name }}:${{ steps.tag.outputs.TAG_COMMIT_SHA || steps.vars.outputs.COMMIT_SHA }}(${{ steps.vars.outputs.DATE }}:${{ steps.vars.outputs.TIME }})"
+          IPFS_PIN_NAME: "${{ github.event.repository.name }}:${{ steps.vars.outputs.TAG_COMMIT_SHA || steps.vars.outputs.COMMIT_SHA }}(${{ steps.vars.outputs.DATE }}:${{ steps.vars.outputs.TIME }})"
       - name: Create ipfs source code archive
         if: inputs.is_create_release
         id: car
@@ -96,7 +96,7 @@ jobs:
           echo "$EXISTING_TITLE" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
         env:
-          TAG: ${{ steps.tag.outputs.TAG }}
+          TAG: ${{ inputs.tag }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Create or update IPFS release draft
         if: inputs.is_create_release
@@ -108,7 +108,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BODY: "${{ steps.body.outputs.EXISTING_BODY }}\n\n${{ steps.pinning.outputs.BODY_RESULT }}"
-          TAG: ${{ steps.tag.outputs.TAG }}
+          TAG: ${{ inputs.tag }}
           TITLE: "${{ steps.body.outputs.EXISTING_TITLE }} (IPFS Pinning ${{ steps.vars.outputs.DATE }})"
           TARGET: ${{ inputs.current_branch }}
           FILE_NAME: ${{ env.FILE_NAME }}
