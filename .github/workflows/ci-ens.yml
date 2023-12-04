@@ -1,0 +1,74 @@
+name: Deploy ENS Base
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipfs_cid:
+        description: "IPFS CID"
+        required: true
+        type: string
+      ens_domain:
+        description: "ENS domain"
+        required: true
+        type: string
+      gnosis_safe:
+        description: "Gnosis Safe address"
+        required: true
+        type: string
+      chain_name:
+        description: "Chain name"
+        required: true
+        type: choice
+        options:
+          - goerli
+          - mainnet
+      environment:
+        description: "Environment"
+        default: "ENS"
+        type: string
+  workflow_call:
+    inputs:
+      ipfs_cid:
+        description: "IPFS CID"
+        required: true
+        type: string
+      ens_domain:
+        description: "ENS domain"
+        type: string
+      gnosis_safe:
+        description: "Gnosis Safe address"
+        type: string
+      chain_name:
+        description: "Chain name"
+        required: true
+        type: string
+      environment:
+        description: "Environment"
+        default: "ENS"
+        type: string
+    secrets:
+      DELEGATE_PRIVATE_KEY:
+        description: "Delegate private key"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy to ENS
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - name: ENS deploy
+        id: deploy
+        run: |
+          export BODY_RESULT=`npx -y blumen@0.6.0 ens $IPFS_CID $ENS_DOMAIN --safe $GNOSIS_SAFE --chain $CHAIN_NAME`
+          echo "$BODY_RESULT" >> $GITHUB_STEP_SUMMARY
+        env:
+          ENS_DOMAIN: ${{ inputs.ens_domain || vars.ENS_DOMAIN }}
+          GNOSIS_SAFE: ${{ inputs.gnosis_safe || vars.GNOSIS_SAFE }}
+          IPFS_CID: ${{ inputs.ipfs_cid }}
+          CHAIN_NAME: ${{ inputs.chain_name }}
+          BLUMEN_PK: "${{ secrets.DELEGATE_PRIVATE_KEY }}"

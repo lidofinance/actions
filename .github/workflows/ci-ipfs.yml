@@ -19,18 +19,25 @@ on:
         description: "Tag for relase"
         required: false
         type: string
+      FILEBASE_BUCKET_NAME:
+        description: "Filebase bucket name"
+        type: string
     secrets:
       W3S_TOKEN:
         description: "Web3Storage token"
         required: true
       GW3_TOKEN:
         description: "Gateway3 token"
+      GW3_ACCESS_KEY:
+        description: "Gateway3 access key"
+      FILEBASE_TOKEN:
+        description: "Filebase token"
 
 permissions:
   contents: write
 
 jobs:
-  deploy-ipfs:
+  deploy:
     env:
       FILE_NAME: ipfs_source_code
     runs-on: ubuntu-latest
@@ -57,13 +64,13 @@ jobs:
           echo "TAG_COMMIT_SHA=$(git rev-parse --short $(git rev-list -n 1 $TAG))" >> "$GITHUB_OUTPUT"
         env:
           TAG: ${{ inputs.tag }}
-      - name: IPFS pinning
-        id: pinning
+      - name: IPFS deploy
+        id: deploy
         run: |
-          export BODY_RESULT=`npx -y blumen@0.0.3 deploy $PATH_TO_IPFS_CONTENT --name $IPFS_PIN_NAME`
+          export BODY_RESULT=`npx -y blumen@0.6.0 deploy $PATH_TO_IPFS_CONTENT --name $IPFS_PIN_NAME`
           echo "$BODY_RESULT" >> $GITHUB_STEP_SUMMARY
-          echo "BODY_RESULT<<EOF" >> $GITHUB_OUTPUT   
-          echo "$BODY_RESULT" >> $GITHUB_OUTPUT   
+          echo "BODY_RESULT<<EOF" >> $GITHUB_OUTPUT
+          echo "$BODY_RESULT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           echo "IPFS_PIN_NAME<<EOF" >> $GITHUB_OUTPUT
           echo "$IPFS_PIN_NAME" >> $GITHUB_OUTPUT
@@ -71,6 +78,9 @@ jobs:
         env:
           BLUMEN_W3S_TOKEN: ${{ secrets.W3S_TOKEN }}
           BLUMEN_GW3_TOKEN: ${{ secrets.GW3_TOKEN }}
+          BLUMEN_GW3_ACCESS_KEY: ${{ secrets.GW3_ACCESS_KEY }}
+          BLUMEN_FILEBASE_TOKEN: ${{ secrets.FILEBASE_TOKEN }}
+          BLUMEN_FILEBASE_BUCKET_NAME: ${{ inputs.FILEBASE_BUCKET_NAME }}
           PATH_TO_IPFS_CONTENT: ${{ inputs.ipfs_folder }}
           IPFS_PIN_NAME: "${{ github.event.repository.name }}:${{ steps.vars.outputs.TAG_COMMIT_SHA || steps.vars.outputs.COMMIT_SHA }}(${{ steps.vars.outputs.DATE }}:${{ steps.vars.outputs.TIME }})"
       - name: Create ipfs source code archive
@@ -82,7 +92,7 @@ jobs:
         env:
           IPFS_CONTENT_NAME: ${{ inputs.ipfs_folder }}
           FILE_NAME: ${{ env.FILE_NAME }}
-          IPFS_PIN_NAME: "${{ steps.pinning.outputs.IPFS_PIN_NAME }}"
+          IPFS_PIN_NAME: "${{ steps.deploy.outputs.IPFS_PIN_NAME }}"
       - name: Get release body from existing release
         if: inputs.is_create_release
         id: body
@@ -107,7 +117,7 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BODY: "${{ steps.body.outputs.EXISTING_BODY }}\n\n${{ steps.pinning.outputs.BODY_RESULT }}"
+          BODY: "${{ steps.body.outputs.EXISTING_BODY }}\n\n${{ steps.deploy.outputs.BODY_RESULT }}"
           TAG: ${{ inputs.tag }}
           TITLE: "${{ steps.body.outputs.EXISTING_TITLE }} (IPFS Pinning ${{ steps.vars.outputs.DATE }})"
           TARGET: ${{ inputs.current_branch }}
