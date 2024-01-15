@@ -25,7 +25,8 @@ on:
     secrets:
       W3S_TOKEN:
         description: "Web3Storage token"
-        required: true
+      W3S_PROOF:
+        description: "Web3Storage proof"
       GW3_TOKEN:
         description: "Gateway3 token"
       GW3_ACCESS_KEY:
@@ -67,7 +68,7 @@ jobs:
       - name: IPFS deploy
         id: deploy
         run: |
-          export BODY_RESULT=`npx -y blumen@0.6.0 deploy $PATH_TO_IPFS_CONTENT --name $IPFS_PIN_NAME`
+          BODY_RESULT=`npx -y blumen@0.8.1 deploy $PATH_TO_IPFS_CONTENT --name $IPFS_PIN_NAME`
           echo "$BODY_RESULT" >> $GITHUB_STEP_SUMMARY
           echo "BODY_RESULT<<EOF" >> $GITHUB_OUTPUT
           echo "$BODY_RESULT" >> $GITHUB_OUTPUT
@@ -77,6 +78,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
         env:
           BLUMEN_W3S_TOKEN: ${{ secrets.W3S_TOKEN }}
+          BLUMEN_W3S_PROOF: ${{ secrets.W3S_PROOF }}
           BLUMEN_GW3_TOKEN: ${{ secrets.GW3_TOKEN }}
           BLUMEN_GW3_ACCESS_KEY: ${{ secrets.GW3_ACCESS_KEY }}
           BLUMEN_FILEBASE_TOKEN: ${{ secrets.FILEBASE_TOKEN }}
