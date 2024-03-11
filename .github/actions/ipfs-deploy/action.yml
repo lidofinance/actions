@@ -1,0 +1,59 @@
+name: IPFS Deploy
+description: "Deploy files to IPFS"
+inputs:
+  W3S_TOKEN:
+    description: "W3S token"
+    required: true
+  W3S_PROOF:
+    description: "W3S proof"
+    required: true
+  GW3_TOKEN:
+    description: "GW3 token"
+    required: true
+  GW3_ACCESS_KEY:
+    description: "GW3 access key"
+    required: true
+  FILEBASE_TOKEN:
+    description: "Filebase token"
+    required: true
+  FILEBASE_BUCKET_NAME:
+    description: "Filebase bucket name"
+    required: true
+  PATH_TO_IPFS_CONTENT:
+    description: "Path to IPFS content"
+    required: true
+  IPFS_PIN_NAME:
+    description: "IPFS pin name"
+    required: true
+outputs:
+  ipfs_pin_name:
+    description: "IPFS pin name"
+    value: ${{ steps.ipfs-deploy.outputs.IPFS_PIN_NAME }}
+  release_body:
+    description: "Release body"
+    value: ${{ steps.ipfs-deploy.outputs.BODY_RESULT }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Deploy files to IPFS
+      id: ipfs-deploy
+      shell: bash
+      run: |
+        BODY_RESULT=`npx -y blumen@0.8.1 deploy $PATH_TO_IPFS_CONTENT --name $IPFS_PIN_NAME`
+        echo "$BODY_RESULT" >> $GITHUB_STEP_SUMMARY
+        echo "BODY_RESULT<<EOF" >> $GITHUB_OUTPUT
+        echo "$BODY_RESULT" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        echo "IPFS_PIN_NAME<<EOF" >> $GITHUB_OUTPUT
+        echo "$IPFS_PIN_NAME" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+      env:
+        BLUMEN_W3S_TOKEN: ${{ inputs.W3S_TOKEN }}
+        BLUMEN_W3S_PROOF: ${{ inputs.W3S_PROOF }}
+        BLUMEN_GW3_TOKEN: ${{ inputs.GW3_TOKEN }}
+        BLUMEN_GW3_ACCESS_KEY: ${{ inputs.GW3_ACCESS_KEY }}
+        BLUMEN_FILEBASE_TOKEN: ${{ inputs.FILEBASE_TOKEN }}
+        BLUMEN_FILEBASE_BUCKET_NAME: ${{ inputs.FILEBASE_BUCKET_NAME }}
+        PATH_TO_IPFS_CONTENT: ${{ inputs.PATH_TO_IPFS_CONTENT }}
+        IPFS_PIN_NAME: ${{ inputs.IPFS_PIN_NAME }}
