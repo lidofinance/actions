@@ -1,0 +1,40 @@
+name: IPFS Release
+description: "Edit or create a draft release and upload files to it"
+inputs:
+  TAG:
+    description: "Tag"
+    required: true
+  GITHUB_TOKEN:
+    description: "GitHub token"
+    required: true
+  BODY:
+    description: "Release body"
+    required: true
+  TITLE:
+    description: "Release title"
+    required: true
+  TARGET:
+    description: "release target"
+    required: true
+  FILE_NAME:
+    description: "Uploaded file name"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Edit or create release draft and upload files
+      id: ipfs-release
+      shell: bash
+      run: >
+        if gh release view $TAG;
+          then gh release edit $TAG --notes "$BODY" -t "$TITLE" && gh release upload $TAG $FILE_NAME.car $FILE_NAME.zip --clobber;
+          else gh release create $TAG --target=$TARGET -t "$TITLE" --notes "$BODY" --draft && gh release upload $TAG $FILE_NAME.car $FILE_NAME.zip;
+        fi
+      env:
+        GITHUB_TOKEN: ${{ inputs.GITHUB_TOKEN }}
+        BODY: ${{ inputs.BODY }}
+        TAG: ${{ inputs.TAG }}
+        TITLE: ${{ inputs.TITLE }}
+        TARGET: ${{ inputs.TARGET }}
+        FILE_NAME: ${{ inputs.FILE_NAME }}

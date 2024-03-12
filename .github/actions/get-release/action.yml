@@ -1,0 +1,35 @@
+name: Get Release
+description: "Get release from existing releases"
+inputs:
+  TAG:
+    description: "Tag"
+    required: true
+  GITHUB_TOKEN:
+    description: "GitHub token"
+    required: true
+outputs:
+  existing_release_body:
+    description: "Release body"
+    value: ${{ steps.release-body.outputs.EXISTING_BODY }}
+  existing_release_title:
+    description: "Release title"
+    value: ${{ steps.release-body.outputs.EXISTING_TITLE }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get release body
+      id: release-body
+      shell: bash
+      run: |
+        export EXISTING_BODY=`gh release view $TAG --json body | jq -r '.body'`
+        export EXISTING_TITLE=`gh release view $TAG --json name | jq -r '.name'`
+        echo "EXISTING_BODY<<EOF" >> $GITHUB_OUTPUT   
+        echo "$EXISTING_BODY" >> $GITHUB_OUTPUT   
+        echo "EOF" >> $GITHUB_OUTPUT
+        echo "EXISTING_TITLE<<EOF" >> $GITHUB_OUTPUT
+        echo "$EXISTING_TITLE" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+      env:
+        TAG: ${{ inputs.TAG }}
+        GITHUB_TOKEN: ${{ inputs.GITHUB_TOKEN }}

@@ -1,0 +1,30 @@
+name: Build Info
+description: "Set tag, commit and branch name"
+inputs:
+  BRANCH_NAME:
+    description: "Branch name"
+    required: true
+outputs:
+  tag:
+    description: "Tag"
+    value: ${{ steps.build-info.outputs.TAG }}
+  tag_commit_sha:
+    description: "Tag commit sha"
+    value: ${{ steps.build-info.outputs.TAG_COMMIT_SHA }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set tag, commit and branch name
+      id: build-info
+      shell: bash
+      run: |
+        export TAG=`echo $(git describe --abbrev=0 --tags)`
+        export TAG_COMMIT_SHA=$(git rev-parse --short $(git rev-list -n 1 $TAG))
+        echo "TAG=$TAG" >> $GITHUB_OUTPUT
+        echo "TAG_COMMIT_SHA=$TAG_COMMIT_SHA" >> "$GITHUB_OUTPUT"
+        echo '{ "branch": "'$BRANCH_NAME'", "commit": "'$TAG_COMMIT_SHA'", "version": "'$TAG'" }' > ./build-info.json
+        export BUILD_INFO=$(cat ./build-info.json)
+        echo "$BUILD_INFO" >> $GITHUB_STEP_SUMMARY
+      env:
+        BRANCH_NAME: ${{ inputs.BRANCH_NAME }}
