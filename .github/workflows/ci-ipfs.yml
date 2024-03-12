@@ -90,7 +90,7 @@ jobs:
       - name: Get release body from existing release
         if: inputs.is_create_release
         id: release-body
-        uses: "./.github/actions/get-release"
+        uses: ./.github/actions/get-release
         with:
           TAG: ${{ inputs.tag }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
