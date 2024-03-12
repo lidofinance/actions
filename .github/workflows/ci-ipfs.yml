@@ -67,7 +67,7 @@ jobs:
           TAG: ${{ inputs.tag }}
       - name: IPFS deploy
         id: deploy
-        uses: ./.github/actions/ipfs-deploy
+        uses: lidofinance/actions/.github/actions/ipfs-deploy@main
         with:
           W3S_TOKEN: ${{ secrets.W3S_TOKEN }}
           W3S_PROOF: ${{ secrets.W3S_PROOF }}
@@ -90,13 +90,13 @@ jobs:
       - name: Get release body from existing release
         if: inputs.is_create_release
         id: release-body
-        uses: ./.github/actions/get-release
+        uses: lidofinance/actions/.github/actions/get-release@main
         with:
           TAG: ${{ inputs.tag }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Create or update IPFS release draft
         if: inputs.is_create_release
-        uses: ./.github/actions/ipfs-release
+        uses: lidofinance/actions/.github/actions/ipfs-release@main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BODY: "${{ steps.release-body.outputs.existing_release_body }}\n\n${{ steps.deploy.outputs.release_body }}"
