@@ -61,7 +61,7 @@ jobs:
       - name: ENS deploy
         id: deploy
         run: |
-          BODY_RESULT=`npx -y blumen@0.8.1 ens $IPFS_CID $ENS_DOMAIN --safe $GNOSIS_SAFE --chain $CHAIN_NAME`
+          BODY_RESULT=`npx -y blumen@0.10.11 ens $IPFS_CID $ENS_DOMAIN --safe $GNOSIS_SAFE --chain $CHAIN_NAME`
           echo "$BODY_RESULT" >> $GITHUB_STEP_SUMMARY
         env:
           ENS_DOMAIN: ${{ inputs.ens_domain || vars.ENS_DOMAIN }}
