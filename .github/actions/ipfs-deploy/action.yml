@@ -40,7 +40,7 @@ runs:
       id: ipfs-deploy
       shell: bash
       run: |
-        BODY_RESULT=`npx -y blumen@0.8.1 deploy $PATH_TO_IPFS_CONTENT --name $IPFS_PIN_NAME`
+        BODY_RESULT=`npx -y blumen@0.10.11 deploy $PATH_TO_IPFS_CONTENT --name $IPFS_PIN_NAME`
         echo "$BODY_RESULT" >> $GITHUB_STEP_SUMMARY
         echo "BODY_RESULT<<EOF" >> $GITHUB_OUTPUT
         echo "$BODY_RESULT" >> $GITHUB_OUTPUT
