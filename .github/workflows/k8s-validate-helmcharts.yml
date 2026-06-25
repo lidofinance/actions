@@ -1,0 +1,44 @@
+name: Validate Helm charts
+
+# Reusable workflow. Renders every chart in the CALLER repo with `helm template`,
+# so chart/template errors fail the caller's PR.
+#
+
+on:
+  workflow_call:
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # Official Helm release, verified against a pinned sha256.
+      - name: Install Helm
+        run: |
+          set -euo pipefail
+          # Bump VER and SHA together (sha256 from https://get.helm.sh/helm-<VER>-linux-amd64.tar.gz.sha256sum)
+          VER="v3.18.6"
+          SHA="3f43c0aa57243852dd542493a0f54f1396c0bc8ec7296bbb2c01e802010819ce"
+          curl -fsSL -o helm.tgz "https://get.helm.sh/helm-${VER}-linux-amd64.tar.gz"
+          echo "${SHA}  helm.tgz" | sha256sum -c -
+          tar -xzf helm.tgz linux-amd64/helm
+          sudo mv linux-amd64/helm /usr/local/bin/helm
+          rm -rf helm.tgz linux-amd64
+          helm version
+
+      - name: Render charts (gate)
+        run: |
+          set -euo pipefail
+          for chart in $(find . -maxdepth 2 -name Chart.yaml -not -path './.git/*' -exec dirname {} \; | sort); do
+            echo "::group::${chart}"
+            helm dependency build "${chart}"
+            for values in "${chart}"/values-k8s-*.yaml; do
+              [ -e "${values}" ] || continue
+              helm template "$(basename "${chart}")" "${chart}" -f "${values}" > /dev/null
+            done
+            echo "::endgroup::"
+          done
