@@ -30,7 +30,20 @@ jobs:
           rm -rf helm.tgz linux-amd64
           helm version
 
-      - name: Render charts (gate)
+      - name: Lint charts
+        run: |
+          set -euo pipefail
+          for chart in $(find . -maxdepth 2 -name Chart.yaml -not -path './.git/*' -exec dirname {} \; | sort); do
+            echo "::group::${chart}"
+            helm dependency build "${chart}"
+            for values in "${chart}"/values-k8s-*.yaml; do
+              [ -e "${values}" ] || continue
+              helm lint "${chart}" -f "${values}"
+            done
+            echo "::endgroup::"
+          done
+
+      - name: Render charts
         run: |
           set -euo pipefail
           for chart in $(find . -maxdepth 2 -name Chart.yaml -not -path './.git/*' -exec dirname {} \; | sort); do
