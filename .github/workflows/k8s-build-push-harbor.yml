@@ -11,6 +11,9 @@ on:
         description: Harbor registry host
         required: true
         type: string
+      registry_username:
+        required: true
+        type: string
       image:
         description: Image path in registry
         required: true
@@ -31,8 +34,6 @@ on:
         default: Dockerfile
 
     secrets:
-      registry_username:
-        required: true
       registry_token:
         required: true
 

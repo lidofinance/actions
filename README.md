@@ -41,6 +41,7 @@ The workflow performs:
 |------|----------|-------------|---------|
 | `tag` | yes | Image tag to push | - |
 | `registry` | yes | Harbor registry host | - |
+| `registry_username` | yes | Harbor username | - |
 | `image` | yes | Image path in Harbor, for example `<harbor-project>/<application-name>` | - |
 | `environment` | yes | GitHub Environment name used for approvals, vars and secrets | - |
 | `build_context` | no | Docker build context | `.` |
@@ -50,7 +51,6 @@ The workflow performs:
 
 | Name | Required | Description |
 |------|----------|-------------|
-| `registry_username` | yes | Harbor username |
 | `registry_token` | yes | Harbor password or robot token |
 
 ### Usage examples
@@ -82,44 +82,10 @@ jobs:
     with:
       tag: ${{ inputs.TAG }}
       registry: registry.prod.k8s-prod.org
+      registry_username: ${{ vars.REGISTRY_PROD_USERNAME }}
       image: <harbor-project>/<application-name>
       environment: <github-environment-name>
     secrets:
-      registry_username: ${{ vars.REGISTRY_USERNAME }}
-      registry_token: ${{ secrets.HARBOR_TOKEN }}
-```
-
-#### Development image
-
-Builds and pushes a development image on every push to the `develop` branch.
-
-```yaml
-name: Build and push <your application name> to dev
-
-run-name: Build and push <your application name>:dev
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - develop
-    paths-ignore:
-      - '.github/**'
-      - 'test/**'
-
-permissions:
-  contents: read
-
-jobs:
-  build-and-push:
-    uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@main
-    with:
-      tag: dev
-      registry: registry.dev.k8s-dev.org
-      image: <harbor-project>/<application-name>
-      environment: <dev-github-environment-name>
-    secrets:
-      registry_username: ${{ vars.REGISTRY_USERNAME }}
       registry_token: ${{ secrets.HARBOR_TOKEN }}
 ```
 
@@ -150,10 +116,44 @@ jobs:
     with:
       tag: staging-${{ github.sha }}
       registry: registry.staging.k8s-staging.org
+      registry_username: ${{ vars.REGISTRY_STAGING_USERNAME }}
       image: <harbor-project>/<application-name>
       environment: <staging-github-environment-name>
     secrets:
-      registry_username: ${{ vars.REGISTRY_USERNAME }}
+      registry_token: ${{ secrets.HARBOR_TOKEN }}
+```
+
+#### Development image
+
+Builds and pushes a development image on every push to the `develop` branch.
+
+```yaml
+name: Build and push <your application name> to dev
+
+run-name: Build and push <your application name>:dev
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+    paths-ignore:
+      - '.github/**'
+      - 'test/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@main
+    with:
+      tag: dev
+      registry: registry.dev.k8s-dev.org
+      registry_username: ${{ vars.REGISTRY_DEVEL_USERNAME }}
+      image: <harbor-project>/<application-name>
+      environment: <dev-github-environment-name>
+    secrets:
       registry_token: ${{ secrets.HARBOR_TOKEN }}
 ```
 
