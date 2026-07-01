@@ -1,0 +1,95 @@
+name: Reusable build and push image to Harbor
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Image tag to push
+        required: true
+        type: string
+      registry:
+        description: Harbor registry host
+        required: true
+        type: string
+      registry_username:
+        description: Harbor username
+        required: true
+        type: string
+      image:
+        description: Image path in registry
+        required: true
+        type: string
+      environment:
+        description: GitHub Environment name
+        required: true
+        type: string
+      build_context:
+        description: Docker build context
+        required: false
+        type: string
+        default: .
+      dockerfile:
+        description: Dockerfile path
+        required: false
+        type: string
+        default: Dockerfile
+
+    secrets:
+      registry_token:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harbor-push-${{ inputs.registry }}-${{ inputs.image }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Validate inputs
+        uses: lidofinance/actions/.github/actions/validate-inputs@75bc90179f3e6d58422ebeb084f6f2c68260a828
+        with:
+          inputs: ${{ toJSON(inputs) }}
+
+      - name: Checkout application repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup buildx
+        id: buildx
+        uses: docker/setup-buildx-action@d70bba72b1f3fd22344832f00baa16ece964efeb # v3.3.0
+
+      - name: Login to Harbor
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ inputs.registry_username }}
+          password: ${{ secrets.registry_token }}
+
+      - name: Build and push docker image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        env:
+          IMAGE_TAG: ${{ inputs.tag }}
+          IMAGE_REF: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.tag }}
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          builder: ${{ steps.buildx.outputs.name }}
+          tags: ${{ env.IMAGE_REF }}
+          build-args: |
+            BUILD_VERSION=${{ env.IMAGE_TAG }}
+            BUILD_BRANCH=${{ github.ref_name }}
+            BUILD_COMMIT=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
