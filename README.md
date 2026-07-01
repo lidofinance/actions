@@ -180,7 +180,7 @@ Example:
 
 ```yaml
 - name: Validate inputs
-  uses: lidofinance/actions/.github/actions/validate-inputs@main
+  uses: lidofinance/actions/.github/actions/validate-inputs@<full-commit-sha>
   with:
     inputs: ${{ toJSON(inputs) }}
 ```
@@ -189,7 +189,7 @@ For pull request testing, use the feature branch instead of `main` until the act
 
 ```yaml
 - name: Validate inputs
-  uses: lidofinance/actions/.github/actions/validate-inputs@<branch-name>
+  uses: lidofinance/actions/.github/actions/validate-inputs@<full-commit-sha>
   with:
     inputs: ${{ toJSON(inputs) }}
 ```
@@ -214,7 +214,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Validate inputs
-        uses: lidofinance/actions/.github/actions/validate-inputs@main
+        uses: lidofinance/actions/.github/actions/validate-inputs@<full-commit-sha>
         with:
           inputs: ${{ toJSON(inputs) }}
 ```
@@ -230,3 +230,5 @@ The current validation pattern is:
 Allowed characters include letters, numbers, underscore, dot, comma, dash and slash.
 
 Inputs containing shell metacharacters such as quotes, semicolons, dollar signs, spaces, or command substitutions will be rejected.
+
+For security and reproducibility, pin reusable workflows and actions to a full commit SHA instead of a mutable branch or tag.
