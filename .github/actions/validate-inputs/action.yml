@@ -1,0 +1,17 @@
+name: Validate workflow inputs
+
+description: Validate workflow inputs
+
+inputs:
+  inputs:
+    description: JSON representation of workflow inputs
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: python3 ${{ github.action_path }}/validate_inputs.py
+      env:
+        INPUTS: ${{ inputs.inputs }}

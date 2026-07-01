@@ -20,6 +20,7 @@ jobs:
   prepare-release-draft:
     uses: lidofinance/actions/.github/workflows/prepare-release-draft.yml@main
 ```
+
 ### `k8s-build-push-harbor.yml`
 
 This reusable workflow builds a Docker image and pushes it to Harbor.
@@ -164,3 +165,68 @@ For development and staging environments it is common to use mutable tags such a
 For production releases, use immutable version tags (for example `1.15.0` or `v1.15.0`) to ensure reproducible deployments.
 
 Prefer pinning reusable workflow versions to a release tag (for example `@v1`) once the workflow API is stable.
+
+## Actions
+
+### `validate-inputs`
+
+Validates GitHub workflow inputs against a safe character allowlist.
+
+This action is useful for reusable workflows that receive user-controlled inputs and later pass them to shell commands, Docker build arguments, labels, tags, or deployment workflows.
+
+The action expects workflow inputs serialized as JSON.
+
+Example:
+
+```yaml
+- name: Validate inputs
+  uses: lidofinance/actions/.github/actions/validate-inputs@main
+  with:
+    inputs: ${{ toJSON(inputs) }}
+```
+
+For pull request testing, use the feature branch instead of `main` until the action is merged:
+
+```yaml
+- name: Validate inputs
+  uses: lidofinance/actions/.github/actions/validate-inputs@<branch-name>
+  with:
+    inputs: ${{ toJSON(inputs) }}
+```
+
+#### Example in a reusable workflow
+
+```yaml
+name: Example reusable workflow
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      image:
+        required: true
+        type: string
+
+jobs:
+  example:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Validate inputs
+        uses: lidofinance/actions/.github/actions/validate-inputs@main
+        with:
+          inputs: ${{ toJSON(inputs) }}
+```
+
+#### Allowed characters
+
+The current validation pattern is:
+
+```text
+^[\d\w.,\-/]+$
+```
+
+Allowed characters include letters, numbers, underscore, dot, comma, dash and slash.
+
+Inputs containing shell metacharacters such as quotes, semicolons, dollar signs, spaces, or command substitutions will be rejected.
