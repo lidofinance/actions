@@ -52,8 +52,7 @@ jobs:
 
     steps:
       - name: Validate inputs
-        # uses: lidofinance/actions/.github/actions/validate-inputs@main
-        uses: lidofinance/actions/.github/actions/validate-inputs@featute/sre-4157-reusable-wf-harbor
+        uses: lidofinance/actions/.github/actions/validate-inputs@main
         with:
           inputs: ${{ toJSON(inputs) }}
 
