@@ -52,7 +52,7 @@ jobs:
 
     steps:
       - name: Validate inputs
-        uses: lidofinance/actions/.github/actions/validate-inputs@75bc90179f3e6d58422ebeb084f6f2c68260a828
+        uses: lidofinance/actions/.github/actions/validate-inputs@f3d609836f57c62e8cfab2a09120310f1349b52c
         with:
           inputs: ${{ toJSON(inputs) }}
 
