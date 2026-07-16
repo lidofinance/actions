@@ -1,0 +1,42 @@
+name: Verify commit signatures
+
+on:
+  workflow_call:
+    inputs:
+      additional_gpg_pubkeys:
+        description: Optional newline-separated paths to additional trusted ASCII-armored public-key files in the caller repository
+        required: false
+        default: ''
+        type: string
+      base_sha:
+        description: Pull request base commit SHA
+        required: true
+        type: string
+      head_sha:
+        description: Pull request head commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify commit signatures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout pull request head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify introduced commits
+        # TODO: Replace with the full SHA of the commit containing this implementation.
+        uses: lidofinance/actions/.github/actions/verify-commit-signatures@deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+        with:
+          base-sha: ${{ inputs.base_sha }}
+          head-sha: ${{ inputs.head_sha }}
+          additional-gpg-pubkeys: ${{ inputs.additional_gpg_pubkeys }}
