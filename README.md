@@ -2,6 +2,9 @@
 This repo contains common actions and workflows for the Lido applications
 
 ## Workflows
+
+- [`verify-commit-signatures.yml`](.github/actions/verify-commit-signatures/README.md)
+
 ### `prepare-release-draft.yml`
 This workflow creates or updates a release draft for the current application version. 
 It should be triggered on a push to the `main` (or your variant) branch.
