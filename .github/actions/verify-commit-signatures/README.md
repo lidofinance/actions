@@ -22,13 +22,13 @@ landing:
 another-repository:
   signers:
     - devops
-  dry: true
 ```
 
 The workflow selects `owner/repository` when present in the config, otherwise
-the short GitHub repository name (such as `landing`). `dry: true` reports
-signature-policy violations as workflow warnings; malformed configuration or
-missing key material still fails the workflow.
+the short GitHub repository name (such as `landing`). `dry` is optional and
+defaults to `true`. In dry mode, signature-policy violations are reported as
+workflow warnings; malformed configuration or missing key material still fails
+the workflow. Set `dry: false` to enforce the policy.
 
 ```yaml
 name: Verify commit signatures

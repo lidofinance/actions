@@ -147,6 +147,15 @@ class VerifyCommitSignaturesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("::warning::", result.stdout + result.stderr)
 
+    def test_dry_run_defaults_to_true(self) -> None:
+        (self.shared_key_directory / "config.yaml").write_text(
+            "test-repository:\n  signers: [webexp]\n", encoding="utf-8"
+        )
+        self.commit("Unknown change", signer=self.unknown_fingerprint, change="unknown\n")
+        result = self.verify()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("::warning::", result.stdout + result.stderr)
+
     def test_no_policy_for_repository_is_rejected(self) -> None:
         result = self.command(
             sys.executable,

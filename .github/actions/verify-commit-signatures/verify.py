@@ -87,8 +87,8 @@ def parse_repository_policies(config_path: Path) -> dict[str, RepositoryPolicy]:
 
     The GitHub runner does not guarantee PyYAML, so this avoids a runtime
     dependency. The supported schema is documented in the action README:
-    top-level repository names, ``signers`` as an inline or block list, and a
-    boolean ``dry`` value.
+    top-level repository names, ``signers`` as an inline or block list, and an
+    optional boolean ``dry`` value (which defaults to true).
     """
     try:
         lines = config_path.read_text(encoding="utf-8").splitlines()
@@ -112,7 +112,7 @@ def parse_repository_policies(config_path: Path) -> dict[str, RepositoryPolicy]:
             repository = config_scalar(text[:-1])
             if not repository or repository in raw:
                 raise VerificationError(f"{config_path}:{line_number}: invalid or duplicate repository {repository!r}")
-            raw[repository] = {"signers": None, "dry": None}
+            raw[repository] = {"signers": None}
             current_repository = repository
             collecting_signers = False
             continue
@@ -143,7 +143,7 @@ def parse_repository_policies(config_path: Path) -> dict[str, RepositoryPolicy]:
             else:
                 raise VerificationError(f"{config_path}:{line_number}: signers must be a YAML list")
         elif setting == "dry":
-            if raw[current_repository]["dry"] is not None or value.lower() not in ("true", "false"):
+            if "dry" in raw[current_repository] or value.lower() not in ("true", "false"):
                 raise VerificationError(f"{config_path}:{line_number}: dry must be true or false")
             raw[current_repository]["dry"] = value.lower() == "true"
         else:
@@ -152,9 +152,9 @@ def parse_repository_policies(config_path: Path) -> dict[str, RepositoryPolicy]:
     policies: dict[str, RepositoryPolicy] = {}
     for repository, policy in raw.items():
         signers = policy["signers"]
-        dry = policy["dry"]
+        dry = policy.get("dry", True)
         if not isinstance(signers, list) or not signers or not isinstance(dry, bool):
-            raise VerificationError(f"{config_path}: {repository!r} requires non-empty signers and dry settings")
+            raise VerificationError(f"{config_path}: {repository!r} requires non-empty signers")
         if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", signer) for signer in signers):
             raise VerificationError(f"{config_path}: {repository!r} has an unsafe signer group name")
         if len(signers) != len(set(signers)):
