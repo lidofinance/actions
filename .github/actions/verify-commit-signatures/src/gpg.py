@@ -13,6 +13,7 @@ from .errors import VerificationError
 
 
 FINGERPRINT = re.compile(r"[0-9A-F]{40}")
+EDDSA_ALGORITHM = 22
 BAD_GPG_STATUSES = (
     "BADSIG",
     "ERRSIG",
@@ -29,6 +30,7 @@ class Subkey:
     """A signing-capable or non-signing OpenPGP subkey."""
 
     fingerprint: str
+    algorithm: int | None
     validity: str
     created: int | None
     expires: int | None
@@ -39,12 +41,18 @@ class Subkey:
         """Report whether GnuPG marks this subkey as signing-capable."""
         return "s" in self.capabilities.lower()
 
+    @property
+    def can_encrypt(self) -> bool:
+        """Report whether GnuPG marks this subkey as encryption-capable."""
+        return "e" in self.capabilities.lower()
+
 
 @dataclass
 class PrimaryKey:
     """An OpenPGP primary key and the subkeys listed beneath it."""
 
     fingerprint: str
+    algorithm: int | None
     validity: str
     created: int | None
     expires: int | None
@@ -56,6 +64,11 @@ class PrimaryKey:
     def can_sign(self) -> bool:
         """Report whether GnuPG marks this primary key as signing-capable."""
         return "s" in self.capabilities.lower()
+
+    @property
+    def can_encrypt(self) -> bool:
+        """Report whether GnuPG marks this primary key as encryption-capable."""
+        return "e" in self.capabilities.lower()
 
 
 def unescape_gpg_colon_field(value: str) -> str:
@@ -92,6 +105,7 @@ def parse_gpg_key_listing(source: Path, output: str) -> list[PrimaryKey]:
             finalize_current_primary_key()
             current = PrimaryKey(
                 fingerprint="",
+                algorithm=int(fields[3] or 0) or None,
                 validity=fields[1].lower(),
                 created=int(fields[5] or 0) or None,
                 expires=int(fields[6] or 0) or None,
@@ -103,6 +117,7 @@ def parse_gpg_key_listing(source: Path, output: str) -> list[PrimaryKey]:
                 raise VerificationError(f"{source}: found a subkey before a primary key")
             subkey = Subkey(
                 fingerprint="",
+                algorithm=int(fields[3] or 0) or None,
                 validity=fields[1].lower(),
                 created=int(fields[5] or 0) or None,
                 expires=int(fields[6] or 0) or None,

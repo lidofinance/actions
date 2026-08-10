@@ -22,7 +22,8 @@ from .checks import (
     ContributorKeyFile,
     Finding,
     KeySnapshot,
-    find_active_signing_subkeys,
+    active_signing_subkeys,
+    find_active_subkeys,
     format_utc_date,
 )
 
@@ -58,7 +59,7 @@ def build_contributor_key_file(source: Path, key_root: Path, primary_keys: list[
         active_subkeys=[
             subkey
             for primary in primary_keys
-            for subkey in find_active_signing_subkeys(primary, now)
+            for subkey in find_active_subkeys(primary, now)
         ],
     )
 
@@ -126,10 +127,11 @@ def render_report(snapshot: KeySnapshot, findings: list[Finding]) -> str:
         "| --- | --- | ---: | ---: | --- |",
     ]
     for identity, entry in sorted(snapshot.key_files.items()):
-        next_expiry = min((subkey.expires for subkey in entry.active_subkeys if subkey.expires is not None), default=None)
+        signing_subkeys = active_signing_subkeys(entry)
+        next_expiry = min((subkey.expires for subkey in signing_subkeys if subkey.expires is not None), default=None)
         shared_uid = ", ".join(sorted(entry.shared_uids)) or "—"
         lines.append(
-            f"| {identity} | {escape_markdown_table_cell(shared_uid)} | {len(entry.keys)} | {len(entry.active_subkeys)} | {format_utc_date(next_expiry)} |"
+            f"| {identity} | {escape_markdown_table_cell(shared_uid)} | {len(entry.keys)} | {len(signing_subkeys)} | {format_utc_date(next_expiry)} |"
         )
     for level, title in (("error", "Errors"), ("warning", "Review warnings")):
         selected = [finding.message for finding in findings if finding.level == level]

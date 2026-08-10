@@ -68,3 +68,6 @@ additions, removals, and status changes are reported when a key export changes.
 Active signing subkeys are capped at two normally and four during a rotation.
 Any active keys beyond two must expire within the next 30 days. Errors fail the
 workflow; warnings are included in the job summary and pull-request comment.
+The checker also warns when an export has any number other than two active
+signing or encryption subkeys, or when its primary or active signing keys do not use
+EdDSA, as recommended by the GPG signing guide.

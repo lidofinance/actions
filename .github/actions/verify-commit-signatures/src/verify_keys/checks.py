@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ..gpg import PrimaryKey, Subkey
+from ..gpg import EDDSA_ALGORITHM, PrimaryKey, Subkey
 
 
 MAX_SIGNING_SUBKEY_LIFETIME_SECONDS = 366 * 24 * 60 * 60
@@ -59,13 +59,13 @@ def is_usable(validity: str) -> bool:
     return validity not in UNUSABLE_VALIDITIES
 
 
-def find_active_signing_subkeys(primary: PrimaryKey, now: int) -> list[Subkey]:
-    """Return currently usable signing subkeys for a viable primary key."""
+def find_active_subkeys(primary: PrimaryKey, now: int) -> list[Subkey]:
+    """Return currently usable subkeys for a viable primary key."""
     if not is_usable(primary.validity):
         return []
     return [
         subkey for subkey in primary.subkeys
-        if subkey.can_sign and is_usable(subkey.validity) and (subkey.expires is None or subkey.expires > now)
+        if is_usable(subkey.validity) and (subkey.expires is None or subkey.expires > now)
     ]
 
 
@@ -77,6 +77,16 @@ def index_signing_subkeys(entry: ContributorKeyFile) -> dict[str, Subkey]:
         for subkey in primary.subkeys
         if subkey.can_sign
     }
+
+
+def active_signing_subkeys(entry: ContributorKeyFile) -> list[Subkey]:
+    """Return active subkeys that can sign."""
+    return [subkey for subkey in entry.active_subkeys if subkey.can_sign]
+
+
+def active_encryption_subkeys(entry: ContributorKeyFile) -> list[Subkey]:
+    """Return active subkeys that can encrypt."""
+    return [subkey for subkey in entry.active_subkeys if subkey.can_encrypt]
 
 
 def check_primary_keys_share_uid(entry: ContributorKeyFile, _: CheckContext) -> list[Finding]:
@@ -121,14 +131,14 @@ def check_signer_group_is_configured(entry: ContributorKeyFile, context: CheckCo
 
 def check_active_signing_subkey_exists(entry: ContributorKeyFile, _: CheckContext) -> list[Finding]:
     """Require every contributor export to retain an active signing subkey."""
-    if entry.active_subkeys:
+    if active_signing_subkeys(entry):
         return []
     return [Finding("error", f"{entry.identity}: has no active signing subkey")]
 
 
 def check_signing_subkey_rotation(entry: ContributorKeyFile, context: CheckContext) -> list[Finding]:
     """Limit active signing subkeys while allowing time-bounded rotations."""
-    active = entry.active_subkeys
+    active = active_signing_subkeys(entry)
     if len(active) > 4:
         return [Finding("error", f"{entry.identity}: has {len(active)} active signing subkeys (maximum is 4)")]
     long_lived = [subkey for subkey in active if subkey.expires is None or subkey.expires > context.now + ROTATION_WINDOW_SECONDS]
@@ -142,7 +152,7 @@ def check_signing_subkey_rotation(entry: ContributorKeyFile, context: CheckConte
 def check_signing_subkey_expiry(entry: ContributorKeyFile, context: CheckContext) -> list[Finding]:
     """Warn when an active signing subkey expires within 14, 30, or 60 days."""
     findings: list[Finding] = []
-    for subkey in entry.active_subkeys:
+    for subkey in active_signing_subkeys(entry):
         if subkey.expires is None:
             continue
         remaining = subkey.expires - context.now
@@ -158,6 +168,50 @@ def check_signing_subkey_expiry(entry: ContributorKeyFile, context: CheckContext
     return findings
 
 
+def check_signing_guide_subkey_counts(entry: ContributorKeyFile, _: CheckContext) -> list[Finding]:
+    """Warn when an export differs from the guide's two-key YubiKey setup."""
+    findings: list[Finding] = []
+    signing_subkeys = active_signing_subkeys(entry)
+    encryption_subkeys = active_encryption_subkeys(entry)
+    if len(signing_subkeys) != 2:
+        findings.append(
+            Finding(
+                "warning",
+                f"{entry.identity}: has {len(signing_subkeys)} active signing subkey(s); the GPG signing guide recommends exactly two",
+            )
+        )
+    if len(encryption_subkeys) != 2:
+        findings.append(
+            Finding(
+                "warning",
+                f"{entry.identity}: has {len(encryption_subkeys)} active encryption subkey(s); the GPG signing guide recommends exactly two",
+            )
+        )
+    return findings
+
+
+def check_signing_guide_algorithms(entry: ContributorKeyFile, _: CheckContext) -> list[Finding]:
+    """Warn when primary or active signing keys are not EdDSA."""
+    findings: list[Finding] = []
+    for primary in entry.keys.values():
+        if primary.algorithm != EDDSA_ALGORITHM:
+            findings.append(
+                Finding(
+                    "warning",
+                    f"{entry.identity}: primary key {primary.fingerprint} does not use EdDSA (algorithm {primary.algorithm or 'unknown'})",
+                )
+            )
+    for subkey in active_signing_subkeys(entry):
+        if subkey.algorithm != EDDSA_ALGORITHM:
+            findings.append(
+                Finding(
+                    "warning",
+                    f"{entry.identity}: signing subkey {subkey.fingerprint} does not use EdDSA (algorithm {subkey.algorithm or 'unknown'})",
+                )
+            )
+    return findings
+
+
 KEY_FILE_CHECKS: tuple[ContributorKeyFileCheck, ...] = (
     check_primary_keys_share_uid,
     check_primary_keys,
@@ -166,6 +220,8 @@ KEY_FILE_CHECKS: tuple[ContributorKeyFileCheck, ...] = (
     check_active_signing_subkey_exists,
     check_signing_subkey_rotation,
     check_signing_subkey_expiry,
+    check_signing_guide_subkey_counts,
+    check_signing_guide_algorithms,
 )
 
 
@@ -188,7 +244,7 @@ def check_configured_groups_have_active_keys(
     return [
         Finding("error", f"configured signer group {group!r} has no active signing subkey")
         for group in context.configured_groups
-        if not any(entry.group == group and entry.active_subkeys for entry in after.key_files.values())
+        if not any(entry.group == group and active_signing_subkeys(entry) for entry in after.key_files.values())
     ]
 
 

@@ -19,6 +19,7 @@ class VerifyKeysTest(unittest.TestCase):
         """Build a valid fixture primary key for one contributor export."""
         return gpg.PrimaryKey(
             fingerprint="A" * 40,
+            algorithm=22,
             validity="u",
             created=1,
             expires=None,
@@ -31,6 +32,7 @@ class VerifyKeysTest(unittest.TestCase):
         """Build a valid fixture signing subkey with a chosen lifetime."""
         return gpg.Subkey(
             fingerprint=fingerprint,
+            algorithm=22,
             validity="u",
             created=created,
             expires=expires,
@@ -55,6 +57,7 @@ class VerifyKeysTest(unittest.TestCase):
         )
         keys = gpg.parse_gpg_key_listing(Path("alice.asc"), listing)
         self.assertEqual(keys[0].fingerprint, "A" * 40)
+        self.assertEqual(keys[0].algorithm, 22)
         self.assertEqual(keys[0].uids, {"Alice Example <alice@example.invalid>"})
         self.assertTrue(keys[0].subkeys[0].can_sign)
         self.assertEqual(keys[0].subkeys[0].fingerprint, "B" * 40)
@@ -84,7 +87,9 @@ class VerifyKeysTest(unittest.TestCase):
                     None, snapshot, {"example": RepositoryPolicy(("secops",))}, now
                 )
         self.assertFalse([finding for finding in findings if finding.level == "error"])
-        self.assertIn("rotation in progress", "\n".join(finding.message for finding in findings))
+        messages = "\n".join(finding.message for finding in findings)
+        self.assertIn("rotation in progress", messages)
+        self.assertIn("guide recommends exactly two", messages)
 
     def test_three_long_lived_keys_are_rejected(self) -> None:
         """Reject a three-key state that is not a time-bounded rotation."""
