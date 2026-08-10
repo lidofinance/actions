@@ -1,5 +1,5 @@
 name: Verify commit signatures
-description: Verify PR commits against repository-authorized GPG public keys
+description: Verify PR commit signatures against repository-authorized GPG public keys
 
 inputs:
   base-sha:
@@ -12,9 +12,9 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Verify commits
+    - name: Verify commit signatures
       shell: bash
-      run: python3 "${{ github.action_path }}/verify.py"
+      run: python3 "${{ github.action_path }}/verify_commit_signatures.py"
       env:
         BASE_SHA: ${{ inputs.base-sha }}
         HEAD_SHA: ${{ inputs.head-sha }}

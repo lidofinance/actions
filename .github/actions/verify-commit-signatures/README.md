@@ -9,26 +9,25 @@ handling for seal commits or commit-message trailers.
 
 Public keys and policy are part of this action, so callers cannot add a key with
 workflow parameters. Store ASCII-armored keys under
-`trusted-gpg-keys/<signer-group>/`; for example,
+`trusted-gpg-keys/<signer-group>/<member>.asc`; for example,
 `trusted-gpg-keys/webexp/alice.asc` and
 `trusted-gpg-keys/secops/github-web-flow.asc`.
 
-`trusted-gpg-keys/config.yaml` maps repositories to authorized signer groups:
+`config.py`, beside the action entrypoints, declares repositories and their
+authorized signer groups:
 
-```yaml
-landing:
-  signers: [webexp, secops]
-  dry: false
-another-repository:
-  signers:
-    - devops
+```python
+REPOSITORIES = {
+    "landing": RepositoryPolicy(("webexp", "secops")),
+    "another-repository": RepositoryPolicy(("devops",), dry=True),
+}
 ```
 
 The workflow selects `owner/repository` when present in the config, otherwise
 the short GitHub repository name (such as `landing`). `dry` is optional and
-defaults to `true`. In dry mode, signature-policy violations are reported as
+defaults to `False`. In dry mode, signature-policy violations are reported as
 workflow warnings; malformed configuration or missing key material still fails
-the workflow. Set `dry: false` to enforce the policy.
+the workflow. Set `dry=True` to report violations without failing.
 
 ```yaml
 name: Verify commit signatures
@@ -40,13 +39,32 @@ permissions:
   contents: read
 
 jobs:
-  verify-commit-signatures:
-    uses: lidofinance/actions/.github/workflows/verify-commit-signatures.yml@<full-commit-sha>
+  verify_commit_signatures:
+    uses: lidofinance/actions/.github/workflows/verify_commit_signatures.yml@<full-commit-sha>
 ```
 
 This reusable workflow must be called from a `pull_request`-triggered workflow;
 it reads the base and head SHAs from that event itself.
 
-The verifier implementation is pinned in the reusable workflow itself. Changes
-to that pin, the signer configuration, or key files remain security-sensitive and
+The reusable workflow deliberately pins the verifier implementation. Changes to
+this action take effect for callers only after that pin is updated. Changes to
+the pin, signer configuration, or key files remain security-sensitive and
 should require the same review as other authentication-policy changes.
+
+## Public-key policy
+
+`verify_keys.yml` runs on pull requests that change this verifier, its workflow,
+or trusted key material. Each key export path is the stable contributor
+identity, for example `trusted-gpg-keys/secops/nikita.k.asc`; exports must not
+contain private key material. During a master-key rotation, retain the old and
+new primary keys in that same file. A primary-key change in one export must
+preserve at least one name/email UID with the base export. The checker reports
+the change for SecOps review and does not reject it solely because the
+fingerprint changed.
+
+The policy requires a non-expiring primary key and signing subkeys valid for at
+most one year. Expired or retired signing subkeys do not count as active; their
+additions, removals, and status changes are reported when a key export changes.
+Active signing subkeys are capped at two normally and four during a rotation.
+Any active keys beyond two must expire within the next 30 days. Errors fail the
+workflow; warnings are included in the job summary and pull-request comment.

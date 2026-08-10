@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify introduced commits
+      - name: Verify introduced commit signatures
         uses: lidofinance/actions/.github/actions/verify-commit-signatures@c306b192c61b1c97b6347557dda79d314f918fbb
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
