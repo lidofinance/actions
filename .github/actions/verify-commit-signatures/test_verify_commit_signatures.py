@@ -45,7 +45,7 @@ class VerifyCommitSignaturesTest(unittest.TestCase):
 
         self.repo = self.root / "repo"
         self.repo.mkdir()
-        self.run_fixture_git("init", "-q")
+        self.run_fixture_git("init", "-q", "-b", "master")
         self.run_fixture_git("config", "user.name", "Verifier test")
         self.run_fixture_git("config", "user.email", "verifier@example.invalid")
         self.run_fixture_git("config", "user.signingkey", self.trusted_fingerprint)
