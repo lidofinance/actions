@@ -62,6 +62,14 @@ class VerifyKeysTest(unittest.TestCase):
         self.assertTrue(keys[0].subkeys[0].can_sign)
         self.assertEqual(keys[0].subkeys[0].fingerprint, "B" * 40)
 
+    def test_gpg_colon_field_decodes_unicode_and_c_style_escapes(self) -> None:
+        """Preserve UTF-8 text while decoding the escapes GnuPG uses in UIDs."""
+        escaped = r"André\x3a Back\x5cslash\nTab\x09"
+        self.assertEqual(
+            gpg.unescape_gpg_colon_field(escaped),
+            "André: Back\\slash\nTab\t",
+        )
+
     def test_contributor_key_file_requires_group_and_member_path(self) -> None:
         """Reject nested public-key paths outside the documented key-store layout."""
         with self.assertRaisesRegex(VerificationError, "<signer-group>/<member>.asc"):

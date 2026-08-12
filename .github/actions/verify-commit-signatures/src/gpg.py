@@ -14,6 +14,19 @@ from .errors import VerificationError
 
 FINGERPRINT = re.compile(r"[0-9A-F]{40}")
 EDDSA_ALGORITHM = 22
+C_STRING_ESCAPES = {
+    "a": "\a",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    "\\": "\\",
+    "'": "'",
+    '"': '"',
+    "?": "?",
+}
 BAD_GPG_STATUSES = (
     "BADSIG",
     "ERRSIG",
@@ -72,10 +85,15 @@ class PrimaryKey:
 
 
 def unescape_gpg_colon_field(value: str) -> str:
-    """Decode GnuPG colon-listing escaped bytes in UID text fields."""
+    """Decode GnuPG's C-style escapes in a colon-listing text field."""
+    def replace_escape(match: re.Match[str]) -> str:
+        """Decode one hexadecimal or named C-style escape sequence."""
+        hexadecimal = match.group(1)
+        return chr(int(hexadecimal, 16)) if hexadecimal else C_STRING_ESCAPES[match.group(2)]
+
     return re.sub(
-        r"\\x([0-9A-Fa-f]{2})",
-        lambda match: chr(int(match.group(1), 16)),
+        r"\\(?:x([0-9A-Fa-f]{2})|([abfnrtv\\'\"?]))",
+        replace_escape,
         value,
     )
 
