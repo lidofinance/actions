@@ -51,6 +51,33 @@ this action take effect for callers only after that pin is updated. Changes to
 the pin, signer configuration, or key files remain security-sensitive and
 should require the same review as other authentication-policy changes.
 
+## Adding or rotating a contributor key
+
+First, find the primary-key fingerprint. In the output below, use the
+fingerprint printed beneath the `sec` primary-key line, not one beneath an
+`ssb` signing-subkey line:
+
+```bash
+gpg --list-secret-keys --fingerprint --keyid-format long
+```
+
+Export that **public primary key** in ASCII armor. Exporting a primary-key
+fingerprint includes its public subkeys:
+
+```bash
+gpg --armor --export YOUR_PRIMARY_KEY_FINGERPRINT > member.asc
+```
+
+Confirm that `member.asc` begins with `-----BEGIN PGP PUBLIC KEY BLOCK-----`,
+then add it at `trusted-gpg-keys/<signer-group>/<member>.asc`; for example,
+`trusted-gpg-keys/secops/nikita.k.asc`. Never add secret-key exports
+(`--export-secret-*`), backups, or revocation certificates to this repository.
+
+When rotating a primary key, export the old and new public primary keys into
+the same contributor file. Keep the filename unchanged and ensure the two keys
+share a name/email UID. Open a pull request for the change; `verify_keys.yml`
+checks the public-key export and reports lifecycle changes for review.
+
 ## Public-key policy
 
 `verify_keys.yml` runs on pull requests that change this verifier, its workflow,
