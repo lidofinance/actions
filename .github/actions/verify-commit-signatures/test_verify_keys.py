@@ -78,6 +78,16 @@ class VerifyKeysTest(unittest.TestCase):
                 Path("trusted-gpg-keys"),
             )
 
+    def test_public_key_discovery_rejects_nested_path(self) -> None:
+        """Reject nested exports instead of silently excluding them from policy checks."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "secops" / "archived" / "alice.asc"
+            source.parent.mkdir(parents=True)
+            source.write_text("public key fixture", encoding="utf-8")
+            with self.assertRaisesRegex(VerificationError, "<signer-group>/<member>.asc"):
+                gpg.find_public_key_files(root)
+
     def test_three_key_rotation_allows_an_imminent_retirement(self) -> None:
         """Permit a third active key only while an older key retires soon."""
         now = 10_000_000

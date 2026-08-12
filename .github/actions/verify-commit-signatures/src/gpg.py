@@ -206,14 +206,11 @@ def find_group_public_key_files(key_root: Path, groups: tuple[str, ...]) -> list
 
 
 def find_public_key_files(key_root: Path) -> list[Path]:
-    """Find public-key exports stored as <signer-group>/<member>.asc files."""
-    files = sorted(
-        source
-        for group_directory in key_root.iterdir()
-        if group_directory.is_dir()
-        for source in group_directory.glob("*.asc")
-        if source.is_file()
-    )
+    """Find and validate public-key exports stored as <group>/<member>.asc."""
+    files = sorted(source for source in key_root.rglob("*.asc") if source.is_file())
+    for source in files:
+        if len(source.relative_to(key_root).parts) != 2:
+            raise VerificationError(f"{source}: public keys must be stored as <signer-group>/<member>.asc")
     if not files:
         raise VerificationError(f"{key_root}: contains no ASCII-armored public keys")
     return files
