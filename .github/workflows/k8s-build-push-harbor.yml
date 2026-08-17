@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: Image tag to push
+        description: Image tag to push; for releases, also the Git tag to build
         required: true
         type: string
       registry:
@@ -21,6 +21,10 @@ on:
         type: string
       environment:
         description: GitHub Environment name
+        required: true
+        type: string
+      branch:
+        description: Branch that must contain the commit being built
         required: true
         type: string
       build_context:
@@ -59,7 +63,111 @@ jobs:
       - name: Checkout application repo
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ github.event_name == 'release' && inputs.tag || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Validate source ref
+        id: source
+        shell: bash
+        env:
+          BRANCH: ${{ inputs.branch }}
+          IMAGE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          source_sha="$(git rev-parse HEAD)"
+          branch_ref="refs/remotes/origin/${BRANCH}"
+
+          if ! git show-ref --verify --quiet "$branch_ref"; then
+            echo "::error::Branch ${BRANCH} does not exist in ${GITHUB_REPOSITORY}"
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$source_sha" "$branch_ref"; then
+            echo "::error::Commit ${source_sha} is not contained in branch ${BRANCH}"
+            exit 1
+          fi
+
+          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
+            case "$BRANCH" in
+              main|master) ;;
+              *)
+                echo "::error::Release builds are allowed only from main or master, got ${BRANCH}"
+                exit 1
+                ;;
+            esac
+
+            if [[ "$IMAGE_TAG" != "$RELEASE_TAG" ]]; then
+              echo "::error::Image tag ${IMAGE_TAG} does not match release tag ${RELEASE_TAG}"
+              exit 1
+            fi
+
+            tag_sha="$(git rev-parse --verify "refs/tags/${IMAGE_TAG}^{commit}")"
+            if [[ "$source_sha" != "$tag_sha" ]]; then
+              echo "::error::Checked out commit ${source_sha} does not match tag ${IMAGE_TAG} (${tag_sha})"
+              exit 1
+            fi
+
+            if [[ "$source_sha" != "$GITHUB_SHA" ]]; then
+              echo "::error::Tag ${IMAGE_TAG} no longer points to release commit ${GITHUB_SHA}"
+              exit 1
+            fi
+          fi
+
+          echo "sha=${source_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Prevent release rollback
+        if: ${{ github.event_name == 'release' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          releases="$(
+            gh api --paginate --slurp -X GET \
+              "/repos/${GITHUB_REPOSITORY}/releases" \
+              -f per_page=100
+          )"
+
+          previous_release_tag="$(
+            jq -r --arg current_tag "$IMAGE_TAG" '
+              [
+                .[][]
+                | select(.draft == false)
+                | select(.prerelease == false)
+                | select(.tag_name != $current_tag)
+                | select(.published_at != null)
+              ]
+              | sort_by(.published_at)
+              | last
+              | .tag_name // empty
+            ' <<< "$releases"
+          )"
+
+          if [[ -z "$previous_release_tag" ]]; then
+            echo "No previous stable release found; skipping rollback check"
+            exit 0
+          fi
+
+          if ! previous_release_sha="$(
+            git rev-parse --verify \
+              "refs/tags/${previous_release_tag}^{commit}"
+          )"; then
+            echo "::error::Previous release tag ${previous_release_tag} is not present in repository history"
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$previous_release_sha" "$SOURCE_SHA"; then
+            echo "::error::Release commit ${SOURCE_SHA} predates or diverges from previous release ${previous_release_tag} (${previous_release_sha})"
+            exit 1
+          fi
+
+          echo "Release commit ${SOURCE_SHA} follows previous release ${previous_release_tag} (${previous_release_sha})"
 
       - name: Setup buildx
         id: buildx
@@ -72,11 +180,25 @@ jobs:
           username: ${{ inputs.registry_username }}
           password: ${{ secrets.registry_token }}
 
+      - name: Ensure release image tag is unused
+        if: ${{ github.event_name == 'release' }}
+        shell: bash
+        env:
+          IMAGE_REF: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if docker manifest inspect "$IMAGE_REF" >/dev/null 2>&1; then
+            echo "::error::Release image ${IMAGE_REF} already exists"
+            exit 1
+          fi
+
       - name: Build and push docker image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         env:
           IMAGE_TAG: ${{ inputs.tag }}
           IMAGE_REF: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile }}
@@ -85,10 +207,10 @@ jobs:
           tags: ${{ env.IMAGE_REF }}
           build-args: |
             BUILD_VERSION=${{ env.IMAGE_TAG }}
-            BUILD_BRANCH=${{ github.ref_name }}
-            BUILD_COMMIT=${{ github.sha }}
+            BUILD_BRANCH=${{ inputs.branch }}
+            BUILD_COMMIT=${{ env.SOURCE_SHA }}
           labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ env.IMAGE_TAG }}
           cache-from: type=gha
