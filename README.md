@@ -28,141 +28,156 @@ jobs:
 
 ### `k8s-build-push-harbor.yml`
 
-This reusable workflow builds a Docker image and pushes it to Harbor.
+This reusable workflow validates application source, builds a Docker image, and
+pushes it to the predefined Harbor registry for the selected target.
 
-It is intended to be called from application repositories via `jobs.<job_id>.uses`.
-
-The workflow performs:
-
-- Application source checkout and branch validation
-- Release tag and rollback validation for production releases
-- Docker Buildx setup
-- Harbor login
-- Existing release image tag check
-- Docker image build
-- Docker image push
-- OCI image labels generation
-- GitHub Actions cache usage
+It is intended to be called from application repositories through
+`jobs.<job_id>.uses`. The caller selects the target, Harbor project, image name,
+and Dockerfile. Registry addresses, GitHub Environment names, credential names,
+source rules, and published image tags are controlled by the reusable workflow.
 
 #### Inputs
 
 | Name | Required | Description | Default |
 |------|----------|-------------|---------|
-| `tag` | yes | Image tag to push; for releases, also the Git tag to build | - |
-| `registry` | yes | Harbor registry host | - |
-| `registry_username` | yes | Harbor username | - |
-| `image` | yes | Image path in Harbor, for example `<harbor-project>/<application-name>` | - |
-| `environment` | yes | GitHub Environment name used for approvals, vars and secrets | - |
-| `branch` | yes | Branch that must contain the commit being built | - |
-| `build_context` | no | Docker build context | `.` |
-| `dockerfile` | no | Dockerfile path | `Dockerfile` |
+| `target` | yes | One of `dev`, `staging`, `prod`, or `critical` | - |
+| `tag` | for prod/critical | Published stable GitHub Release tag | `""` |
+| `harbor_project` | yes | Team-owned Harbor project | - |
+| `image` | yes | Image name inside the Harbor project; nested paths are supported | - |
+| `dockerfile` | no | Dockerfile path relative to the repository root | `Dockerfile` |
 
-#### Secrets
+`harbor_project` and `image` are separate values. For example,
+`harbor_project: <harbor-project>` and `image: <image-name>` publish to
+`<registry>/<harbor-project>/<image-name>:<tag>`.
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `registry_token` | yes | Harbor password or robot token |
+`harbor_project` is the Harbor project assigned to the application team. It
+normally follows the `team-<your_team_name>` naming convention.
+
+#### Trusted target mapping
+
+| Target | Registry | GitHub Environment | Image tag | Environment secret |
+|--------|----------|--------------------|-----------|--------------------|
+| `dev` | `registry.dev.k8s-dev.org` | `harbor_dev_release` | `dev` | `HARBOR_DEV_TOKEN` |
+| `staging` | `registry.staging.k8s-staging.org` | `harbor_stage_release` | `staging` | `HARBOR_STAGE_TOKEN` |
+| `prod` | `registry.prod.k8s-prod.org` | `harbor_prod_release` | release tag | `HARBOR_PROD_TOKEN` |
+| `critical` | `registry.critical.k8s-prod.org` | `harbor_crit_release` | release tag | `HARBOR_CRIT_TOKEN` |
+
+Each Environment must also provide `REGISTRY_USERNAME` as a GitHub Environment
+variable. Secrets are read directly by the reusable workflow and are not passed
+by the caller.
+
+#### Outputs
+
+| Name | Description |
+|------|-------------|
+| `image_ref` | Published image reference, including its tag |
+| `image_digest` | Published `sha256` image digest |
 
 #### Source selection and validation
 
-For workflows triggered by a GitHub `release` event:
+For `prod` and `critical`:
 
-- `tag` is both the Git tag to check out and the Harbor image tag;
-- `branch` must be either `main` or `master`;
-- the image tag must match `github.event.release.tag_name`;
-- the tag must still reference the commit that triggered the release;
-- the tagged commit must be contained in `branch`;
+- the caller must use `workflow_dispatch` and the run must be dispatched from
+  the `main` branch;
+- the `tag` input must use stable SemVer form such as `v1.2.3` or `1.2.3`;
+- the tag must belong to an existing published, non-draft, non-prerelease GitHub
+  Release;
+- the workflow checks out the tag, not the branch head;
+- the tagged commit must be contained in `main`;
 - the tagged commit must not predate or diverge from the latest other stable
   GitHub Release;
-- an image with the same registry, image name, and tag must not already exist.
+- the tag and GitHub Release are checked again before the build.
 
-Drafts and prereleases are not used as the rollback baseline. The rollback check
-is skipped when the repository has no earlier stable release.
+The production source branch is intentionally fixed to `main` and does not
+follow `github.event.repository.default_branch`. If `main` does not exist, the
+workflow stops with a message asking the repository owner to create or rename
+the production branch.
 
-For other events, such as `push` and `workflow_dispatch`, the workflow checks out
-`github.sha`. The commit must be contained in `branch`, while `tag` is used only
-as the Harbor image tag. When starting a workflow manually, select the same Git
-branch that is passed through the `branch` input.
+For `dev` and `staging`, the workflow builds `github.sha` from the branch that
+started the caller workflow. The `tag` input is forbidden. Access to the Harbor
+credential is additionally limited by the deployment branch rules configured
+on the corresponding GitHub Environment.
 
-The resolved checkout commit is written to `BUILD_COMMIT` and the
-`org.opencontainers.image.revision` OCI label. `BUILD_BRANCH` contains the
-validated `branch` input.
+The resolved commit and branch are passed as `BUILD_COMMIT` and `BUILD_BRANCH`
+build arguments. The workflow also adds the standard OCI source, revision, and
+version labels.
+
+#### Build and credential boundary
+
+The caller cannot select the Docker build context. The workflow exports the
+validated commit with `git archive` into an isolated temporary directory. This
+context contains tracked repository files only and excludes `.git`, untracked
+files, and the runner filesystem.
+
+The selected Dockerfile must resolve to a regular file inside that isolated
+context. Docker build runs before Harbor login, so an application-controlled
+Dockerfile cannot copy the runner's Harbor Docker configuration into an image.
+After a successful build, the workflow logs in to the target registry and pushes
+the already-built local image.
+
+The isolated context does not include Git submodule contents. Applications that
+need submodules in the Docker build require additional workflow support.
+
+#### Required repository and Harbor configuration
+
+- Create the GitHub Environments and variables/secrets listed in the target
+  mapping table.
+- Configure each Environment's deployment branch rules. Required reviewers are
+  optional; the workflow itself does not require a manual approval.
+- Allow only `main` to deploy through `harbor_prod_release` and
+  `harbor_crit_release`.
+- Enable Harbor tag immutability for production and critical repositories. The
+  workflow does not use `docker manifest inspect` as an overwrite protection.
+- Protect release tags in GitHub against update and deletion. Restrict creation
+  of release tag patterns to trusted maintainers or release automation.
+- Scope each Harbor robot credential to the intended team project and target.
 
 ### Usage examples
 
 #### Production or critical release image
 
-Publishes an immutable versioned image when a stable GitHub Release is published.
+The production build is started manually after the stable GitHub Release has
+been published. Select `main` in the **Run workflow** branch selector and enter
+the release tag.
 
 ```yaml
-name: Build and push <your application name> to production
+name: Build production image
 
-run-name: Build and push <your application name>:${{ github.event.release.tag_name }} to production
-
-on:
-  release:
-    types: [released]
-
-permissions:
-  contents: read
-
-jobs:
-  build-and-push:
-    uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@<full-commit-sha>
-    with:
-      tag: ${{ github.event.release.tag_name }}
-      branch: main
-      registry: registry.prod.k8s-prod.org
-      registry_username: ${{ vars.REGISTRY_PROD_USERNAME }}
-      image: <harbor-project>/<application-name>
-      environment: <github-environment-name>
-    secrets:
-      registry_token: ${{ secrets.HARBOR_TOKEN }}
-```
-
-#### Staging image
-
-Builds and pushes a staging image on every push to the `main` branch.
-
-```yaml
-name: Build and push <your application name> to staging
-
-run-name: Build and push <your application name>:staging
+run-name: Build production image ${{ inputs.tag }}
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - '.github/**'
-      - 'test/**'
+    inputs:
+      tag:
+        description: Published stable GitHub Release tag
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  build-and-push:
+  build:
     uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@<full-commit-sha>
     with:
-      tag: staging
-      branch: main
-      registry: registry.staging.k8s-staging.org
-      registry_username: ${{ vars.REGISTRY_STAGING_USERNAME }}
-      image: <harbor-project>/<application-name>
-      environment: <staging-github-environment-name>
-    secrets:
-      registry_token: ${{ secrets.HARBOR_TOKEN }}
+      target: prod
+      tag: ${{ inputs.tag }}
+      harbor_project: <harbor-project>
+      image: <image-name>
+      # dockerfile: path/to/Dockerfile
 ```
+
+For the critical registry, use the same caller with `target: critical`.
 
 #### Development image
 
-Builds and pushes a development image on every push to the `develop` branch.
+This example publishes the mutable `dev` tag from `develop`. The
+`harbor_dev_release` Environment must allow the same branch.
 
 ```yaml
-name: Build and push <your application name> to dev
+name: Build development image
 
-run-name: Build and push <your application name>:dev
+run-name: Build development image from ${{ github.ref_name }}
 
 on:
   workflow_dispatch:
@@ -170,31 +185,61 @@ on:
     branches:
       - develop
     paths-ignore:
-      - '.github/**'
-      - 'test/**'
+      - ".github/**"
+      - "test/**"
 
 permissions:
   contents: read
 
 jobs:
-  build-and-push:
+  build:
     uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@<full-commit-sha>
     with:
-      tag: dev
-      branch: develop
-      registry: registry.dev.k8s-dev.org
-      registry_username: ${{ vars.REGISTRY_DEVEL_USERNAME }}
-      image: <harbor-project>/<application-name>
-      environment: <dev-github-environment-name>
-    secrets:
-      registry_token: ${{ secrets.HARBOR_TOKEN }}
+      target: dev
+      harbor_project: <harbor-project>
+      image: <image-name>
+      # dockerfile: path/to/Dockerfile
+```
+
+#### Staging image
+
+Staging uses the same branch-based flow. This example publishes the mutable
+`staging` tag from `main`.
+
+```yaml
+name: Build staging image
+
+run-name: Build staging image from ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - ".github/**"
+      - "test/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@<full-commit-sha>
+    with:
+      target: staging
+      harbor_project: <harbor-project>
+      image: <image-name>
+      # dockerfile: path/to/Dockerfile
 ```
 
 ### Notes
 
-For development and staging environments it is common to use mutable tags such as `dev` and `staging`. Each successful build updates the corresponding image.
+Development and staging use mutable `dev` and `staging` image tags. Production
+and critical use the supplied immutable release tag.
 
-For production releases, use immutable version tags (for example `1.15.0` or `v1.15.0`) to ensure reproducible deployments.
+The current build loads a single-platform image into the local Docker daemon
+before publishing. Multi-platform builds require a different publish design.
 
 Pin reusable workflows to a reviewed full commit SHA. Do not use a mutable branch
 or tag for production and critical release workflows.
@@ -203,9 +248,12 @@ or tag for production and critical release workflows.
 
 ### `validate-inputs`
 
-Validates GitHub workflow inputs against a safe character allowlist.
+Validates GitHub workflow inputs against a basic character allowlist.
 
-This action is useful for reusable workflows that receive user-controlled inputs and later pass them to shell commands, Docker build arguments, labels, tags, or deployment workflows.
+This action can reject common shell metacharacters in user-controlled inputs. It
+does not validate the grammar or authorization rules of a particular field and
+must not be treated as sufficient validation for Docker tags, image names,
+registry addresses, filesystem paths, or other security-sensitive values.
 
 The action expects workflow inputs serialized as JSON.
 
@@ -263,5 +311,11 @@ The current validation pattern is:
 Allowed characters include letters, numbers, underscore, dot, comma, dash and slash.
 
 Inputs containing shell metacharacters such as quotes, semicolons, dollar signs, spaces, or command substitutions will be rejected.
+
+Comma is intentionally accepted by this generic action, but several GitHub
+Actions parse comma-containing inputs as lists. Callers must add field-specific
+validation that rejects comma whenever a value must represent exactly one tag,
+image, path, or destination. The Harbor reusable workflow implements its own
+field-specific validation and does not use this generic action.
 
 For security and reproducibility, pin reusable workflows and actions to a full commit SHA instead of a mutable branch or tag.

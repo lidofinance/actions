@@ -3,136 +3,240 @@ name: Reusable build and push image to Harbor
 on:
   workflow_call:
     inputs:
+      target:
+        description: "Deployment target: dev, staging, prod, or critical"
+        required: true
+        type: string
       tag:
-        description: Image tag to push; for releases, also the Git tag to build
-        required: true
+        description: Published stable GitHub Release tag for prod or critical
+        required: false
         type: string
-      registry:
-        description: Harbor registry host
-        required: true
-        type: string
-      registry_username:
-        description: Harbor username
+        default: ""
+      harbor_project:
+        description: Harbor project owned by the calling team
         required: true
         type: string
       image:
-        description: Image path in registry
+        description: Image name inside the Harbor project
         required: true
         type: string
-      environment:
-        description: GitHub Environment name
-        required: true
-        type: string
-      branch:
-        description: Branch that must contain the commit being built
-        required: true
-        type: string
-      build_context:
-        description: Docker build context
-        required: false
-        type: string
-        default: .
       dockerfile:
-        description: Dockerfile path
+        description: Dockerfile path relative to the repository root
         required: false
         type: string
         default: Dockerfile
-
-    secrets:
-      registry_token:
-        required: true
+    outputs:
+      image_ref:
+        description: Published image reference with tag
+        value: ${{ jobs.publish.outputs.image_ref }}
+      image_digest:
+        description: Published image digest
+        value: ${{ jobs.publish.outputs.image_digest }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: harbor-push-${{ inputs.registry }}-${{ inputs.image }}-${{ inputs.tag }}
+  group: harbor-${{ github.repository_id }}-${{ inputs.target }}
   cancel-in-progress: false
 
 jobs:
-  build-and-push:
-    environment: ${{ inputs.environment }}
+  validate:
+    name: Validate source and inputs
     runs-on: ubuntu-22.04
+    outputs:
+      github_environment: ${{ steps.config.outputs.github_environment }}
+      image_tag: ${{ steps.config.outputs.image_tag }}
+      is_release: ${{ steps.config.outputs.is_release }}
+      remote_name: ${{ steps.config.outputs.remote_name }}
+      source_branch: ${{ steps.config.outputs.source_branch }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
 
     steps:
-      - name: Validate inputs
-        uses: lidofinance/actions/.github/actions/validate-inputs@f3d609836f57c62e8cfab2a09120310f1349b52c
-        with:
-          inputs: ${{ toJSON(inputs) }}
-
-      - name: Checkout application repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ github.event_name == 'release' && inputs.tag || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Validate source ref
-        id: source
+      - name: Configure target and validate inputs
+        id: config
         shell: bash
         env:
-          BRANCH: ${{ inputs.branch }}
-          IMAGE_TAG: ${{ inputs.tag }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          HARBOR_PROJECT: ${{ inputs.harbor_project }}
+          IMAGE: ${{ inputs.image }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ inputs.tag }}
+          TARGET: ${{ inputs.target }}
         run: |
           set -euo pipefail
 
-          source_sha="$(git rev-parse HEAD)"
-          branch_ref="refs/remotes/origin/${BRANCH}"
+          case "$TARGET" in
+            dev)
+              registry="registry.dev.k8s-dev.org"
+              github_environment="harbor_dev_release"
+              image_tag="dev"
+              is_release="false"
+              ;;
+            staging)
+              registry="registry.staging.k8s-staging.org"
+              github_environment="harbor_stage_release"
+              image_tag="staging"
+              is_release="false"
+              ;;
+            prod)
+              registry="registry.prod.k8s-prod.org"
+              github_environment="harbor_prod_release"
+              image_tag="$TAG"
+              is_release="true"
+              ;;
+            critical)
+              registry="registry.critical.k8s-prod.org"
+              github_environment="harbor_crit_release"
+              image_tag="$TAG"
+              is_release="true"
+              ;;
+            *)
+              echo "::error::Unknown target '${TARGET}'. Expected dev, staging, prod, or critical"
+              exit 1
+              ;;
+          esac
+
+          if [[ ! "$HARBOR_PROJECT" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
+            echo "::error::Invalid Harbor project '${HARBOR_PROJECT}'"
+            exit 1
+          fi
+
+          if [[ ! "$IMAGE" =~ ^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$ ]]; then
+            echo "::error::Invalid image name '${IMAGE}'"
+            exit 1
+          fi
+
+          if [[ -z "$DOCKERFILE" || "$DOCKERFILE" == /* || ! "$DOCKERFILE" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::Dockerfile must be a relative repository path using letters, numbers, '.', '_', '-', and '/'"
+            exit 1
+          fi
+
+          if [[ "$is_release" == "true" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+              echo "::error::${TARGET} builds must be started with workflow_dispatch"
+              exit 1
+            fi
+
+            if [[ ! "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::${TARGET} requires a stable release tag such as v1.2.3 or 1.2.3"
+              exit 1
+            fi
+
+            source_branch="main"
+            source_ref="$TAG"
+          else
+            if [[ -n "$TAG" ]]; then
+              echo "::error::The tag input cannot be used for ${TARGET}"
+              exit 1
+            fi
+
+            if [[ "$REF_TYPE" != "branch" ]]; then
+              echo "::error::${TARGET} builds must run from a branch"
+              exit 1
+            fi
+
+            source_branch="$REF_NAME"
+            if ! git check-ref-format --branch "$source_branch" >/dev/null; then
+              echo "::error::Invalid source branch '${source_branch}'"
+              exit 1
+            fi
+            source_ref="$GITHUB_SHA"
+          fi
+
+          remote_name="${registry}/${HARBOR_PROJECT}/${IMAGE}"
+
+          {
+            echo "github_environment=${github_environment}"
+            echo "image_tag=${image_tag}"
+            echo "is_release=${is_release}"
+            echo "remote_name=${remote_name}"
+            echo "source_branch=${source_branch}"
+            echo "source_ref=${source_ref}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source to validate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ steps.config.outputs.source_ref }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Validate source
+        id: source
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
+          IS_RELEASE: ${{ steps.config.outputs.is_release }}
+          SOURCE_BRANCH: ${{ steps.config.outputs.source_branch }}
+        run: |
+          set -euo pipefail
+
+          source_sha="$(git rev-parse --verify 'HEAD^{commit}')"
+          branch_ref="refs/remotes/origin/${SOURCE_BRANCH}"
 
           if ! git show-ref --verify --quiet "$branch_ref"; then
-            echo "::error::Branch ${BRANCH} does not exist in ${GITHUB_REPOSITORY}"
+            if [[ "$IS_RELEASE" == "true" ]]; then
+              echo "::error::Required production branch main does not exist in ${GITHUB_REPOSITORY}"
+              echo "::error::Create or rename the production branch to main before publishing releases"
+            else
+              echo "::error::Branch ${SOURCE_BRANCH} does not exist in ${GITHUB_REPOSITORY}"
+            fi
+            exit 1
+          fi
+
+          if [[ "$IS_RELEASE" == "true" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Production and critical builds must be dispatched from the main branch"
             exit 1
           fi
 
           if ! git merge-base --is-ancestor "$source_sha" "$branch_ref"; then
-            echo "::error::Commit ${source_sha} is not contained in branch ${BRANCH}"
+            echo "::error::Commit ${source_sha} is not contained in branch ${SOURCE_BRANCH}"
             exit 1
           fi
 
-          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
-            case "$BRANCH" in
-              main|master) ;;
-              *)
-                echo "::error::Release builds are allowed only from main or master, got ${BRANCH}"
-                exit 1
-                ;;
-            esac
-
-            if [[ "$IMAGE_TAG" != "$RELEASE_TAG" ]]; then
-              echo "::error::Image tag ${IMAGE_TAG} does not match release tag ${RELEASE_TAG}"
-              exit 1
-            fi
-
+          if [[ "$IS_RELEASE" == "true" ]]; then
             tag_sha="$(git rev-parse --verify "refs/tags/${IMAGE_TAG}^{commit}")"
-            if [[ "$source_sha" != "$tag_sha" ]]; then
+            if [[ "$tag_sha" != "$source_sha" ]]; then
               echo "::error::Checked out commit ${source_sha} does not match tag ${IMAGE_TAG} (${tag_sha})"
-              exit 1
-            fi
-
-            if [[ "$source_sha" != "$GITHUB_SHA" ]]; then
-              echo "::error::Tag ${IMAGE_TAG} no longer points to release commit ${GITHUB_SHA}"
               exit 1
             fi
           fi
 
-          echo "sha=${source_sha}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=${source_sha}" >> "$GITHUB_OUTPUT"
 
-      - name: Prevent release rollback
-        if: ${{ github.event_name == 'release' }}
+      - name: Validate published GitHub Release
+        if: ${{ steps.config.outputs.is_release == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          IMAGE_TAG: ${{ inputs.tag }}
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
         run: |
           set -euo pipefail
 
-          releases="$(
-            gh api --paginate --slurp -X GET \
-              "/repos/${GITHUB_REPOSITORY}/releases" \
-              -f per_page=100
-          )"
+          if ! release="$(gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${IMAGE_TAG}")"; then
+            echo "::error::Published GitHub Release ${IMAGE_TAG} was not found"
+            exit 1
+          fi
+
+          if ! jq -e --arg tag "$IMAGE_TAG" '.tag_name == $tag and .draft == false and .prerelease == false and .published_at != null' <<< "$release" >/dev/null; then
+            echo "::error::${IMAGE_TAG} must be an existing published stable GitHub Release"
+            exit 1
+          fi
+
+      - name: Prevent release rollback
+        if: ${{ steps.config.outputs.is_release == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          releases="$(gh api --paginate --slurp -X GET "/repos/${GITHUB_REPOSITORY}/releases" -f per_page=100)"
 
           previous_release_tag="$(
             jq -r --arg current_tag "$IMAGE_TAG" '
@@ -154,10 +258,7 @@ jobs:
             exit 0
           fi
 
-          if ! previous_release_sha="$(
-            git rev-parse --verify \
-              "refs/tags/${previous_release_tag}^{commit}"
-          )"; then
+          if ! previous_release_sha="$(git rev-parse --verify "refs/tags/${previous_release_tag}^{commit}")"; then
             echo "::error::Previous release tag ${previous_release_tag} is not present in repository history"
             exit 1
           fi
@@ -169,49 +270,163 @@ jobs:
 
           echo "Release commit ${SOURCE_SHA} follows previous release ${previous_release_tag} (${previous_release_sha})"
 
-      - name: Setup buildx
-        id: buildx
-        uses: docker/setup-buildx-action@d70bba72b1f3fd22344832f00baa16ece964efeb # v3.3.0
+  publish:
+    name: Build and publish image
+    needs: validate
+    runs-on: ubuntu-22.04
+    environment: ${{ needs.validate.outputs.github_environment }}
+    outputs:
+      image_ref: ${{ steps.push.outputs.image_ref }}
+      image_digest: ${{ steps.push.outputs.image_digest }}
 
-      - name: Login to Harbor
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          registry: ${{ inputs.registry }}
-          username: ${{ inputs.registry_username }}
-          password: ${{ secrets.registry_token }}
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
 
-      - name: Ensure release image tag is unused
-        if: ${{ github.event_name == 'release' }}
+      - name: Revalidate release tag
+        if: ${{ needs.validate.outputs.is_release == 'true' }}
         shell: bash
         env:
-          IMAGE_REF: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
         run: |
           set -euo pipefail
 
-          if docker manifest inspect "$IMAGE_REF" >/dev/null 2>&1; then
-            echo "::error::Release image ${IMAGE_REF} already exists"
+          tag_sha="$(git rev-parse --verify "refs/tags/${IMAGE_TAG}^{commit}")"
+          if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
+            echo "::error::Tag ${IMAGE_TAG} changed after validation"
             exit 1
           fi
 
-      - name: Build and push docker image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+          if ! release="$(gh api "/repos/${GITHUB_REPOSITORY}/releases/tags/${IMAGE_TAG}")"; then
+            echo "::error::Published GitHub Release ${IMAGE_TAG} disappeared after validation"
+            exit 1
+          fi
+
+          if ! jq -e --arg tag "$IMAGE_TAG" '.tag_name == $tag and .draft == false and .prerelease == false and .published_at != null' <<< "$release" >/dev/null; then
+            echo "::error::GitHub Release ${IMAGE_TAG} changed after validation"
+            exit 1
+          fi
+
+      - name: Prepare isolated build context
+        id: context
+        shell: bash
         env:
-          IMAGE_TAG: ${{ inputs.tag }}
-          IMAGE_REF: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.tag }}
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          context_dir="${RUNNER_TEMP}/docker-build-context"
+          mkdir -p "$context_dir"
+          git archive --format=tar "$SOURCE_SHA" | tar -xf - -C "$context_dir"
+
+          context_dir="$(realpath -e -- "$context_dir")"
+          if ! dockerfile="$(realpath -e -- "${context_dir}/${DOCKERFILE}")"; then
+            echo "::error::Dockerfile '${DOCKERFILE}' does not exist in the validated commit"
+            exit 1
+          fi
+
+          case "$dockerfile" in
+            "${context_dir}/"*) ;;
+            *)
+              echo "::error::Dockerfile must resolve inside the repository build context"
+              exit 1
+              ;;
+          esac
+
+          if [[ ! -f "$dockerfile" ]]; then
+            echo "::error::Dockerfile '${DOCKERFILE}' is not a regular file"
+            exit 1
+          fi
+
+          echo "context_dir=${context_dir}" >> "$GITHUB_OUTPUT"
+          echo "dockerfile=${dockerfile}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@d70bba72b1f3fd22344832f00baa16ece964efeb  # v3.3.0
+
+      - name: Build Docker image without registry credentials
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
-          context: ${{ inputs.build_context }}
-          file: ${{ inputs.dockerfile }}
-          push: true
+          context: ${{ steps.context.outputs.context_dir }}
+          file: ${{ steps.context.outputs.dockerfile }}
+          push: false
+          load: true
+          provenance: false
           builder: ${{ steps.buildx.outputs.name }}
-          tags: ${{ env.IMAGE_REF }}
+          tags: local-build:${{ github.run_id }}-${{ github.run_attempt }}
           build-args: |
-            BUILD_VERSION=${{ env.IMAGE_TAG }}
-            BUILD_BRANCH=${{ inputs.branch }}
-            BUILD_COMMIT=${{ env.SOURCE_SHA }}
+            BUILD_VERSION=${{ needs.validate.outputs.image_tag }}
+            BUILD_BRANCH=${{ needs.validate.outputs.source_branch }}
+            BUILD_COMMIT=${{ needs.validate.outputs.source_sha }}
           labels: |
-            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+            org.opencontainers.image.revision=${{ needs.validate.outputs.source_sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.version=${{ env.IMAGE_TAG }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            org.opencontainers.image.version=${{ needs.validate.outputs.image_tag }}
+          cache-from: type=gha,scope=${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
+          cache-to: type=gha,mode=max,scope=${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
+
+      - name: Login to development Harbor
+        if: ${{ inputs.target == 'dev' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: registry.dev.k8s-dev.org
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.HARBOR_DEV_TOKEN }}
+
+      - name: Login to staging Harbor
+        if: ${{ inputs.target == 'staging' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: registry.staging.k8s-staging.org
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.HARBOR_STAGE_TOKEN }}
+
+      - name: Login to production Harbor
+        if: ${{ inputs.target == 'prod' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: registry.prod.k8s-prod.org
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.HARBOR_PROD_TOKEN }}
+
+      - name: Login to critical Harbor
+        if: ${{ inputs.target == 'critical' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: registry.critical.k8s-prod.org
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.HARBOR_CRIT_TOKEN }}
+
+      - name: Push Docker image
+        id: push
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          LOCAL_IMAGE: local-build:${{ github.run_id }}-${{ github.run_attempt }}
+          REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}
+        run: |
+          set -euo pipefail
+
+          remote_ref="${REMOTE_NAME}:${IMAGE_TAG}"
+          docker tag "$LOCAL_IMAGE" "$remote_ref"
+          docker push "$remote_ref"
+
+          image_digest="$(docker buildx imagetools inspect "$remote_ref" --format '{{json .Manifest}}' | jq -r '.digest // empty')"
+
+          if [[ ! "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not determine the digest of ${remote_ref} after push"
+            exit 1
+          fi
+
+          echo "Published ${remote_ref}@${image_digest}"
+          echo "image_ref=${remote_ref}" >> "$GITHUB_OUTPUT"
+          echo "image_digest=${image_digest}" >> "$GITHUB_OUTPUT"
