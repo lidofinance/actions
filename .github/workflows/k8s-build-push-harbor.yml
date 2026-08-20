@@ -137,7 +137,7 @@ jobs:
               exit 1
             fi
 
-            source_branch="main"
+            source_branch="workflow_test"
             source_ref="$TAG"
           else
             if [[ -n "$TAG" ]]; then
@@ -192,16 +192,15 @@ jobs:
 
           if ! git show-ref --verify --quiet "$branch_ref"; then
             if [[ "$IS_RELEASE" == "true" ]]; then
-              echo "::error::Required production branch main does not exist in ${GITHUB_REPOSITORY}"
-              echo "::error::Create or rename the production branch to main before publishing releases"
+              echo "::error::Temporary production test branch workflow_test does not exist in ${GITHUB_REPOSITORY}"
             else
               echo "::error::Branch ${SOURCE_BRANCH} does not exist in ${GITHUB_REPOSITORY}"
             fi
             exit 1
           fi
 
-          if [[ "$IS_RELEASE" == "true" && "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::Production and critical builds must be dispatched from the main branch"
+          if [[ "$IS_RELEASE" == "true" && "$GITHUB_REF" != "refs/heads/workflow_test" ]]; then
+            echo "::error::Temporary production tests must be dispatched from workflow_test"
             exit 1
           fi
 
