@@ -63,8 +63,13 @@ normally follows the `team-<your_team_name>` naming convention.
 | `critical` | `registry.critical.k8s-prod.org` | `harbor_crit_release` | release tag | `HARBOR_CRIT_TOKEN` |
 
 Each Environment must also provide `REGISTRY_USERNAME` as a GitHub Environment
-variable. Secrets are read directly by the reusable workflow and are not passed
-by the caller.
+variable. The caller grants the reusable workflow access to secrets with
+`secrets: inherit`. The reusable workflow then selects the Environment and the
+fixed token name for the requested target; the caller cannot choose either one.
+
+The four token entries in `workflow_call.secrets` are optional because each run
+uses exactly one of them. A missing token still causes the corresponding Harbor
+login step to fail.
 
 #### Outputs
 
@@ -165,6 +170,7 @@ jobs:
       harbor_project: <harbor-project>
       image: <image-name>
       # dockerfile: path/to/Dockerfile
+    secrets: inherit
 ```
 
 For the critical registry, use the same caller with `target: critical`.
@@ -199,6 +205,7 @@ jobs:
       harbor_project: <harbor-project>
       image: <image-name>
       # dockerfile: path/to/Dockerfile
+    secrets: inherit
 ```
 
 #### Staging image
@@ -231,6 +238,7 @@ jobs:
       harbor_project: <harbor-project>
       image: <image-name>
       # dockerfile: path/to/Dockerfile
+    secrets: inherit
 ```
 
 ### Notes
@@ -243,6 +251,11 @@ before publishing. Multi-platform builds require a different publish design.
 
 Pin reusable workflows to a reviewed full commit SHA. Do not use a mutable branch
 or tag for production and critical release workflows.
+
+`secrets: inherit` grants the called workflow access to secrets available to the
+caller. Use it only with the trusted reusable workflow pinned to a reviewed full
+commit SHA. The workflow references only the fixed Harbor token name selected for
+the requested target and never passes that token to the Docker build.
 
 ## Actions
 
