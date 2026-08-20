@@ -25,19 +25,6 @@ on:
         required: false
         type: string
         default: Dockerfile
-    secrets:
-      HARBOR_DEV_TOKEN:
-        description: Harbor token from the harbor_dev_release Environment
-        required: false
-      HARBOR_STAGE_TOKEN:
-        description: Harbor token from the harbor_stage_release Environment
-        required: false
-      HARBOR_PROD_TOKEN:
-        description: Harbor token from the harbor_prod_release Environment
-        required: false
-      HARBOR_CRIT_TOKEN:
-        description: Harbor token from the harbor_crit_release Environment
-        required: false
     outputs:
       image_ref:
         description: Published image reference with tag
@@ -94,8 +81,8 @@ jobs:
               is_release="false"
               ;;
             prod)
-              registry="registry.dev.k8s-dev.org"
-              github_environment="harbor_dev_release"
+              registry="registry.prod.k8s-prod.org"
+              github_environment="harbor_prod_release"
               image_tag="$TAG"
               is_release="true"
               ;;
@@ -137,7 +124,7 @@ jobs:
               exit 1
             fi
 
-            source_branch="workflow_test"
+            source_branch="main"
             source_ref="$TAG"
           else
             if [[ -n "$TAG" ]]; then
@@ -192,15 +179,16 @@ jobs:
 
           if ! git show-ref --verify --quiet "$branch_ref"; then
             if [[ "$IS_RELEASE" == "true" ]]; then
-              echo "::error::Temporary production test branch workflow_test does not exist in ${GITHUB_REPOSITORY}"
+              echo "::error::Required production branch main does not exist in ${GITHUB_REPOSITORY}"
+              echo "::error::Create or rename the production branch to main before publishing releases"
             else
               echo "::error::Branch ${SOURCE_BRANCH} does not exist in ${GITHUB_REPOSITORY}"
             fi
             exit 1
           fi
 
-          if [[ "$IS_RELEASE" == "true" && "$GITHUB_REF" != "refs/heads/workflow_test" ]]; then
-            echo "::error::Temporary production tests must be dispatched from workflow_test"
+          if [[ "$IS_RELEASE" == "true" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Production and critical builds must be dispatched from the main branch"
             exit 1
           fi
 
@@ -402,13 +390,13 @@ jobs:
           username: ${{ vars.REGISTRY_USERNAME }}
           password: ${{ secrets.HARBOR_STAGE_TOKEN }}
 
-      - name: Login to development Harbor for temporary production test
+      - name: Login to production Harbor
         if: ${{ inputs.target == 'prod' }}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
-          registry: registry.dev.k8s-dev.org
+          registry: registry.prod.k8s-prod.org
           username: ${{ vars.REGISTRY_USERNAME }}
-          password: ${{ secrets.HARBOR_DEV_TOKEN }}
+          password: ${{ secrets.HARBOR_PROD_TOKEN }}
 
       - name: Login to critical Harbor
         if: ${{ inputs.target == 'critical' }}

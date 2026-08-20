@@ -67,10 +67,6 @@ variable. The caller grants the reusable workflow access to secrets with
 `secrets: inherit`. The reusable workflow then selects the Environment and the
 fixed token name for the requested target; the caller cannot choose either one.
 
-The four token entries in `workflow_call.secrets` are optional because each run
-uses exactly one of them. A missing token still causes the corresponding Harbor
-login step to fail.
-
 #### Outputs
 
 | Name | Description |
