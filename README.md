@@ -133,8 +133,8 @@ enabled after CI and Harbor use a shared CVE allowlist.
 
 Failure to run Trivy or produce a valid report stops publication for every
 target. The CI scan uses raw Trivy findings and does not apply Harbor system or
-project CVE allowlists. The Trivy action and scanner version are pinned in the
-reusable workflow.
+project CVE allowlists. The official Trivy container is pinned by digest at
+version `v0.62.1` to match the scanner version used by Harbor.
 
 Harbor automatic scanning and pull prevention remain required. The pre-push CI
 scan provides earlier feedback, while Harbor continues to enforce its configured

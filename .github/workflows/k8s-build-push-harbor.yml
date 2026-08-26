@@ -375,17 +375,24 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
 
       - name: Scan Docker image with Trivy
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
-        with:
-          image-ref: local-build:${{ github.run_id }}-${{ github.run_attempt }}
-          format: json
-          output: ${{ runner.temp }}/trivy-report.json
-          exit-code: "0"
-          ignore-unfixed: false
-          vuln-type: os,library
-          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
-          scanners: vuln
-          version: v0.62.1
+        shell: bash
+        env:
+          IMAGE_REF: local-build:${{ github.run_id }}-${{ github.run_attempt }}
+          TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:fc10faf341a1d8fa8256c5ff1a6662ef74dd38b65034c8ce42346cf958a02d5d  # v0.62.1
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "$RUNNER_TEMP:/reports" \
+            "$TRIVY_IMAGE" image \
+            --format json \
+            --output /reports/trivy-report.json \
+            --exit-code 0 \
+            --vuln-type os,library \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+            --scanners vuln \
+            "$IMAGE_REF"
 
       - name: Upload Trivy vulnerability report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
