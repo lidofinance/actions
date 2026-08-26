@@ -374,6 +374,77 @@ jobs:
           cache-from: type=gha,scope=${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
           cache-to: type=gha,mode=max,scope=${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
 
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: local-build:${{ github.run_id }}-${{ github.run_attempt }}
+          format: json
+          output: ${{ runner.temp }}/trivy-report.json
+          exit-code: "0"
+          ignore-unfixed: false
+          vuln-type: os,library
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          scanners: vuln
+          version: v0.62.1
+
+      - name: Upload Trivy vulnerability report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: trivy-${{ github.repository_id }}-${{ inputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/trivy-report.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summarize vulnerability report
+        shell: bash
+        env:
+          TRIVY_REPORT: ${{ runner.temp }}/trivy-report.json
+        run: |
+          set -euo pipefail
+
+          if ! jq -e 'type == "object" and (.Results | type == "array")' "$TRIVY_REPORT" >/dev/null; then
+            echo "::error::Trivy did not produce a valid vulnerability report"
+            exit 1
+          fi
+
+          {
+            echo "### Trivy vulnerability scan"
+            echo
+            echo "| Severity | Count |"
+            echo "|----------|------:|"
+            for severity in UNKNOWN LOW MEDIUM HIGH CRITICAL; do
+              count="$(jq --arg severity "$severity" '[.Results[]?.Vulnerabilities[]? | select(.Severity == $severity)] | length' "$TRIVY_REPORT")"
+              echo "| ${severity} | ${count} |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          critical_count="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$TRIVY_REPORT")"
+
+          if (( critical_count == 0 )); then
+            echo "No CRITICAL vulnerabilities found"
+            exit 0
+          fi
+
+          echo "CRITICAL vulnerabilities:"
+          jq -r '
+            [
+              .Results[]? as $result
+              | $result.Vulnerabilities[]?
+              | select(.Severity == "CRITICAL")
+              | [
+                  $result.Target,
+                  .VulnerabilityID,
+                  .PkgName,
+                  (.InstalledVersion // ""),
+                  (.FixedVersion // "")
+                ]
+            ]
+            | .[:50][]
+            | @tsv
+          ' "$TRIVY_REPORT"
+
+          echo "::warning::Trivy found ${critical_count} CRITICAL vulnerabilities; vulnerability scanning is report-only"
+
       - name: Login to development Harbor
         if: ${{ inputs.target == 'dev' }}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3

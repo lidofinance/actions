@@ -119,6 +119,27 @@ the already-built local image.
 The isolated context does not include Git submodule contents. Applications that
 need submodules in the Docker build require additional workflow support.
 
+#### Vulnerability scanning
+
+The locally built image is scanned with Trivy before Harbor login and push. The
+scan covers OS and application library vulnerabilities, including vulnerabilities
+without an available fix. A JSON report containing all severity levels is stored
+as a workflow artifact for 30 days, and severity counts are written to the job
+summary.
+
+Vulnerability scanning is currently report-only for every target. Findings do
+not block publication to `dev`, `staging`, `prod`, or `critical`. Blocking can be
+enabled after CI and Harbor use a shared CVE allowlist.
+
+Failure to run Trivy or produce a valid report stops publication for every
+target. The CI scan uses raw Trivy findings and does not apply Harbor system or
+project CVE allowlists. The Trivy action and scanner version are pinned in the
+reusable workflow.
+
+Harbor automatic scanning and pull prevention remain required. The pre-push CI
+scan provides earlier feedback, while Harbor continues to enforce its configured
+vulnerability policy for published images.
+
 #### Required repository and Harbor configuration
 
 - Create the GitHub Environments and variables/secrets listed in the target
