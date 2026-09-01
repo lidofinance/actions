@@ -349,6 +349,36 @@ jobs:
           echo "context_dir=${context_dir}" >> "$GITHUB_OUTPUT"
           echo "dockerfile=${dockerfile}" >> "$GITHUB_OUTPUT"
 
+      - name: Populate build-info.json
+        shell: bash
+        env:
+          BUILD_CONTEXT: ${{ steps.context.outputs.context_dir }}
+          BUILD_VERSION: ${{ needs.validate.outputs.image_tag }}
+          BUILD_BRANCH: ${{ needs.validate.outputs.source_branch }}
+          BUILD_COMMIT: ${{ needs.validate.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          build_info="${BUILD_CONTEXT}/build-info.json"
+          if [[ -L "$build_info" ]]; then
+            echo "::error::build-info.json must not be a symbolic link"
+            exit 1
+          fi
+
+          if [[ -e "$build_info" && ! -f "$build_info" ]]; then
+            echo "::error::build-info.json must be a regular file"
+            exit 1
+          fi
+
+          temporary_file="$(mktemp "${BUILD_CONTEXT}/.build-info.json.XXXXXX")"
+          jq -n \
+            --arg version "$BUILD_VERSION" \
+            --arg branch "$BUILD_BRANCH" \
+            --arg commit "$BUILD_COMMIT" \
+            '{version: $version, branch: $branch, commit: $commit}' > "$temporary_file"
+          chmod 0644 "$temporary_file"
+          mv "$temporary_file" "$build_info"
+
       - name: Set up Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@d70bba72b1f3fd22344832f00baa16ece964efeb  # v3.3.0

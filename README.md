@@ -99,16 +99,34 @@ started the caller workflow. The `tag` input is forbidden. Access to the Harbor
 credential is additionally limited by the deployment branch rules configured
 on the corresponding GitHub Environment.
 
-The resolved commit and branch are passed as `BUILD_COMMIT` and `BUILD_BRANCH`
-build arguments. The workflow also adds the standard OCI source, revision, and
-version labels.
+Before the Docker build, the workflow creates or replaces `build-info.json` in
+the root of the isolated build context with the validated source information:
+
+```json
+{
+  "version": "v1.2.3",
+  "branch": "main",
+  "commit": "0123456789abcdef0123456789abcdef01234567"
+}
+```
+
+This preserves compatibility with applications that previously relied on the
+legacy infrastructure workflow to populate this file before the build. Such
+applications only need to copy `build-info.json` as part of their normal Docker
+build context.
+
+The same values are also passed as the `BUILD_VERSION`, `BUILD_BRANCH`, and
+`BUILD_COMMIT` Docker build arguments. A Dockerfile that uses these arguments
+must declare the corresponding `ARG` instructions. The workflow also adds the
+standard OCI source, revision, and version labels.
 
 #### Build and credential boundary
 
 The caller cannot select the Docker build context. The workflow exports the
 validated commit with `git archive` into an isolated temporary directory. This
 context contains tracked repository files only and excludes `.git`, untracked
-files, and the runner filesystem.
+files, and the runner filesystem. The generated `build-info.json` is the only
+file added or replaced in this context before the Docker build.
 
 The selected Dockerfile must resolve to a regular file inside that isolated
 context. Docker build runs before Harbor login, so an application-controlled
