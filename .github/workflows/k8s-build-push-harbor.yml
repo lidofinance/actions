@@ -238,37 +238,37 @@ jobs:
 
           releases="$(gh api --paginate --slurp -X GET "/repos/${GITHUB_REPOSITORY}/releases" -f per_page=100)"
 
-          previous_release_tag="$(
+          stable_release_tags_output="$(
             jq -r --arg current_tag "$IMAGE_TAG" '
-              [
-                .[][]
-                | select(.draft == false)
-                | select(.prerelease == false)
-                | select(.tag_name != $current_tag)
-                | select(.published_at != null)
-              ]
-              | sort_by(.published_at)
-              | last
-              | .tag_name // empty
+              .[][]
+              | select(.draft == false)
+              | select(.prerelease == false)
+              | select(.tag_name != $current_tag)
+              | select(.published_at != null)
+              | .tag_name
             ' <<< "$releases"
           )"
 
-          if [[ -z "$previous_release_tag" ]]; then
-            echo "No previous stable release found; skipping rollback check"
+          if [[ -z "$stable_release_tags_output" ]]; then
+            echo "No other published stable release found; skipping rollback check"
             exit 0
           fi
 
-          if ! previous_release_sha="$(git rev-parse --verify "refs/tags/${previous_release_tag}^{commit}")"; then
-            echo "::error::Previous release tag ${previous_release_tag} is not present in repository history"
-            exit 1
-          fi
+          mapfile -t stable_release_tags <<< "$stable_release_tags_output"
 
-          if ! git merge-base --is-ancestor "$previous_release_sha" "$SOURCE_SHA"; then
-            echo "::error::Release commit ${SOURCE_SHA} predates or diverges from previous release ${previous_release_tag} (${previous_release_sha})"
-            exit 1
-          fi
+          for release_tag in "${stable_release_tags[@]}"; do
+            if ! release_sha="$(git rev-parse --verify "refs/tags/${release_tag}^{commit}")"; then
+              echo "::error::Published stable release tag ${release_tag} is not present in repository history"
+              exit 1
+            fi
 
-          echo "Release commit ${SOURCE_SHA} follows previous release ${previous_release_tag} (${previous_release_sha})"
+            if ! git merge-base --is-ancestor "$release_sha" "$SOURCE_SHA"; then
+              echo "::error::Release commit ${SOURCE_SHA} predates or diverges from published stable release ${release_tag} (${release_sha})"
+              exit 1
+            fi
+          done
+
+          echo "Release commit ${SOURCE_SHA} follows all other published stable releases"
 
   publish:
     name: Build and publish image

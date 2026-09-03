@@ -85,7 +85,7 @@ For `prod` and `critical`:
   Release;
 - the workflow checks out the tag, not the branch head;
 - the tagged commit must be contained in `main`;
-- the tagged commit must not predate or diverge from the latest other stable
+- the tagged commit must not predate or diverge from any other published stable
   GitHub Release;
 - the tag and GitHub Release are checked again before the build.
 
