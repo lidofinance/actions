@@ -8,6 +8,8 @@ permissions:
 
 jobs:
   verify:
+    # TODO: Remove this exemption after lidofinance/actions is added to config.py.
+    if: github.repository != 'lidofinance/actions'
     name: Verify commit signatures
     runs-on: ubuntu-24.04
     timeout-minutes: 15
