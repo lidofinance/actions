@@ -1,0 +1,69 @@
+name: Verify keys
+
+on:
+  pull_request:
+    paths:
+      - .github/actions/verify-commit-signatures/**
+      - .github/workflows/verify_keys.yml
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  verify:
+    name: Verify keys
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout pull request head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify keys
+        id: verify_keys
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REPORT: ${{ runner.temp }}/verify_keys.md
+        run: |
+          set -o pipefail
+          python3 .github/actions/verify-commit-signatures/verify_keys.py | tee "$REPORT"
+
+      - name: Publish job summary
+        if: always()
+        env:
+          REPORT: ${{ runner.temp }}/verify_keys.md
+        run: |
+          if [ -f "$REPORT" ]; then
+            cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '## Verify keys' >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo 'The checker terminated before producing a report.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Publish pull request comment
+        if: >-
+          always() &&
+          github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPORT: ${{ runner.temp }}/verify_keys.md
+        run: |
+          test -f "$REPORT" || exit 0
+          body="$(printf '%s\n' '<!-- verify_keys_report -->'; cat "$REPORT")"
+          comment_id="$(gh api --paginate "/repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --jq '.[] | select(.body | contains("<!-- verify_keys_report -->")) | .id' | head -n 1)"
+          if [ -n "$comment_id" ]; then
+            gh api --method PATCH "/repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" -f body="$body" >/dev/null
+          else
+            gh api --method POST "/repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
+          fi
+
+      - name: Fail on policy errors
+        if: steps.verify_keys.outcome == 'failure'
+        run: exit 1
