@@ -183,7 +183,7 @@ The workflow performs:
 - Checksum-pinned `crane` install
 - Harbor login
 - `crane copy` of the full multi-arch index
-- Destination digest check against the pinned source digest
+- Digest check against the pinned source digest, using the digest `crane copy` prints (Harbor’s prevent-vuln policy and in-progress Trivy scans block `crane digest` / GET of the destination)
 
 `crane copy` is used instead of `docker pull` / `tag` / `push` so the Harbor image keeps every architecture and the same digest as Docker Hub. A GitHub-hosted runner `docker pull` would only fetch `linux/amd64` and could produce a new digest.
 

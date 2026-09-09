@@ -96,10 +96,15 @@ jobs:
           src="docker.io/${SOURCE_IMAGE}@${SOURCE_DIGEST}"
           dest="${REGISTRY}/${DEST_IMAGE}:${DEST_TAG}"
           echo "Copying ${src} -> ${dest}"
-          crane copy "$src" "$dest"
-          copied="$(crane digest "$dest")"
-          if [ "$copied" != "$SOURCE_DIGEST" ]; then
-            echo "::error::Digest mismatch: expected ${SOURCE_DIGEST}, got ${copied}"
+          copy_log="$RUNNER_TEMP/crane-copy.log"
+          if ! crane copy "$src" "$dest" >"$copy_log" 2>&1; then
+            cat "$copy_log"
+            exit 1
+          fi
+          cat "$copy_log"
+          copied="$(sed -n 's/.*digest: \(sha256:[a-fA-F0-9]\{64\}\).*/\1/p' "$copy_log" | tail -1)"
+          if [ -z "$copied" ] || [ "$copied" != "$SOURCE_DIGEST" ]; then
+            echo "::error::Digest mismatch or the tag already exists in Harbor"
             exit 1
           fi
           echo "Copied ${dest} with digest ${copied}"
