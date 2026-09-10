@@ -9,7 +9,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import verify_keys as policy
-from config import RepositoryPolicy
 from src import gpg
 from src import commands
 from src.commands import VerificationError
@@ -38,6 +37,15 @@ class VerifyKeysTest(unittest.TestCase):
             created=created,
             expires=expires,
             capabilities="s",
+        )
+
+    def build_entry(self, identity: str, primary: gpg.PrimaryKey) -> policy.ContributorKeyFile:
+        """Build a snapshot entry from one primary key."""
+        return policy.ContributorKeyFile(
+            identity=identity,
+            keys={primary.fingerprint: primary},
+            shared_uids=set(primary.uids),
+            active_subkeys=list(primary.subkeys),
         )
 
     def write_key_export_fixture(self, root: Path) -> Path:
@@ -120,7 +128,7 @@ class VerifyKeysTest(unittest.TestCase):
             with patch.object(policy, "parse_public_key_files", return_value={source: [primary]}):
                 snapshot = policy.build_key_snapshot(root, now)
                 findings = policy.collect_policy_findings(
-                    None, snapshot, {"example": RepositoryPolicy(("secops",))}, now
+                    None, snapshot, now
                 )
         self.assertFalse([finding for finding in findings if finding.level == "error"])
         messages = "\n".join(finding.message for finding in findings)
@@ -141,11 +149,63 @@ class VerifyKeysTest(unittest.TestCase):
             with patch.object(policy, "parse_public_key_files", return_value={source: [primary]}):
                 snapshot = policy.build_key_snapshot(root, now)
                 findings = policy.collect_policy_findings(
-                    None, snapshot, {"example": RepositoryPolicy(("secops",))}, now
+                    None, snapshot, now
                 )
         self.assertIn(
             "rotation has more than two active signing subkeys beyond 30 days",
             "\n".join(finding.message for finding in findings),
+        )
+
+    def test_current_policy_checks_skip_unchanged_exports(self) -> None:
+        """Do not report policy findings for files unchanged from the base."""
+        now = 10_000_000
+        existing = self.build_primary_key()
+        existing.algorithm = 1
+        existing.expires = now + 1
+        existing.capabilities = "sc"
+        added = self.build_primary_key(
+            self.build_signing_subkey("B" * 40, now, now + 200 * 24 * 60 * 60)
+        )
+        before = {"secops/existing": self.build_entry("secops/existing", existing)}
+        after = {
+            **before,
+            "devops/added": self.build_entry("devops/added", added),
+        }
+
+        findings = policy.collect_policy_findings(before, after, now)
+
+        messages = "\n".join(finding.message for finding in findings)
+        self.assertNotIn("secops/existing", messages)
+        self.assertNotIn("signer group 'devops' is not used", messages)
+        self.assertNotIn("contributor export added", messages)
+
+    def test_current_policy_checks_changed_exports(self) -> None:
+        """Apply current-state checks when an existing export is changed."""
+        now = 10_000_000
+        before_primary = self.build_primary_key(
+            self.build_signing_subkey("B" * 40, now, now + 200 * 24 * 60 * 60)
+        )
+        after_primary = self.build_primary_key(
+            self.build_signing_subkey("B" * 40, now, now + 200 * 24 * 60 * 60)
+        )
+        after_primary.expires = now + 1
+        after_primary.uids = {"Bob Example <bob@example.invalid>"}
+        before = {"secops/alice": self.build_entry("secops/alice", before_primary)}
+        after = {"secops/alice": self.build_entry("secops/alice", after_primary)}
+
+        findings = policy.collect_policy_findings(before, after, now)
+
+        messages = "\n".join(finding.message for finding in findings)
+        self.assertIn(
+            "secops/alice: primary key " + "A" * 40 + " must not have an expiration",
+            messages,
+        )
+        self.assertTrue(
+            any(
+                finding.level == "error"
+                and "does not preserve a common name/email UID" in finding.message
+                for finding in findings
+            )
         )
 
 
