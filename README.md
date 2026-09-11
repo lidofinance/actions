@@ -86,7 +86,7 @@ For `prod` and `critical`:
 - the workflow checks out the tag, not the branch head;
 - the tagged commit must be contained in `main`;
 - the tagged commit must not predate or diverge from any other published stable
-  GitHub Release;
+  GitHub Release whose commit is contained in `main`;
 - the tag and GitHub Release are checked again before the build.
 
 The production source branch is intentionally fixed to `main` and does not
