@@ -514,9 +514,9 @@ jobs:
         if: ${{ inputs.target == 'prod' }}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
-          registry: registry.prod.k8s-prod.org
+          registry: registry.dev.k8s-dev.org
           username: ${{ vars.REGISTRY_USERNAME }}
-          password: ${{ secrets.HARBOR_PROD_TOKEN }}
+          password: ${{ secrets.HARBOR_DEV_TOKEN }}
 
       - name: Login to critical Harbor
         if: ${{ inputs.target == 'critical' }}
