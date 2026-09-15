@@ -226,62 +226,6 @@ jobs:
             exit 1
           fi
 
-      - name: Prevent release rollback
-        if: ${{ steps.config.outputs.is_release == 'true' }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
-          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
-        run: |
-          set -euo pipefail
-
-          releases="$(gh api --paginate --slurp -X GET "/repos/${GITHUB_REPOSITORY}/releases" -f per_page=100)"
-
-          stable_release_tags_output="$(
-            jq -r --arg current_tag "$IMAGE_TAG" '
-              .[][]
-              | select(.draft == false)
-              | select(.prerelease == false)
-              | select(.tag_name != $current_tag)
-              | select(.published_at != null)
-              | .tag_name
-            ' <<< "$releases"
-          )"
-
-          if [[ -z "$stable_release_tags_output" ]]; then
-            echo "No other published stable release found; skipping rollback check"
-            exit 0
-          fi
-
-          mapfile -t stable_release_tags <<< "$stable_release_tags_output"
-          checked_release_count=0
-
-          for release_tag in "${stable_release_tags[@]}"; do
-            if ! release_sha="$(git rev-parse --verify "refs/tags/${release_tag}^{commit}")"; then
-              echo "::error::Published stable release tag ${release_tag} is not present in repository history"
-              exit 1
-            fi
-
-            if ! git merge-base --is-ancestor "$release_sha" refs/remotes/origin/main; then
-              echo "::warning::Ignoring published stable release ${release_tag} (${release_sha}) because its commit is not contained in main"
-              continue
-            fi
-
-            checked_release_count=$((checked_release_count + 1))
-
-            if ! git merge-base --is-ancestor "$release_sha" "$SOURCE_SHA"; then
-              echo "::error::Release commit ${SOURCE_SHA} predates or diverges from published stable release ${release_tag} (${release_sha})"
-              exit 1
-            fi
-          done
-
-          if [[ "$checked_release_count" -eq 0 ]]; then
-            echo "No other published stable release from main found; skipping rollback check"
-          else
-            echo "Release commit ${SOURCE_SHA} follows all other published stable releases from main"
-          fi
-
   publish:
     name: Build and publish image
     needs: validate
@@ -525,6 +469,95 @@ jobs:
           registry: registry.critical.k8s-prod.org
           username: ${{ vars.REGISTRY_USERNAME }}
           password: ${{ secrets.HARBOR_CRIT_TOKEN }}
+
+      - name: Prevent release rollback
+        if: ${{ needs.validate.outputs.is_release == 'true' }}
+        shell: bash
+        env:
+          HARBOR_TOKEN: ${{ inputs.target == 'prod' && secrets.HARBOR_DEV_TOKEN || secrets.HARBOR_CRIT_TOKEN }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
+          REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          registry="${REMOTE_NAME%%/*}"
+          repository="${REMOTE_NAME#*/}"
+
+          token_response="$(
+            curl --fail-with-body --silent --show-error \
+              --user "${REGISTRY_USERNAME}:${HARBOR_TOKEN}" \
+              --get "https://${registry}/service/token" \
+              --data-urlencode "service=harbor-registry" \
+              --data-urlencode "scope=repository:${repository}:pull"
+          )"
+          registry_token="$(jq -er '.token // .access_token' <<< "$token_response")"
+          unset HARBOR_TOKEN token_response
+
+          tags_file="${RUNNER_TEMP}/harbor-release-tags.json"
+          http_status="$(
+            curl --silent --show-error \
+              --output "$tags_file" \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer ${registry_token}" \
+              "https://${registry}/v2/${repository}/tags/list"
+          )"
+          unset registry_token
+
+          if [[ "$http_status" == "404" ]] && jq -e '.errors[]? | select(.code == "NAME_UNKNOWN")' "$tags_file" >/dev/null; then
+            echo "No existing Harbor repository ${REMOTE_NAME}; skipping rollback check"
+            exit 0
+          fi
+
+          if [[ "$http_status" != "200" ]]; then
+            echo "::error::Harbor returned HTTP ${http_status} while listing tags for ${REMOTE_NAME}"
+            exit 1
+          fi
+
+          if ! jq -e --arg repository "$repository" '.name == $repository and ((.tags == null) or (.tags | type == "array"))' "$tags_file" >/dev/null; then
+            echo "::error::Harbor returned an invalid tag list for ${REMOTE_NAME}"
+            exit 1
+          fi
+
+          stable_release_tags_output="$(jq -r '.tags[]? | select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+$"))' "$tags_file")"
+
+          if [[ -z "$stable_release_tags_output" ]]; then
+            echo "No stable release tags found in ${REMOTE_NAME}; skipping rollback check"
+            exit 0
+          fi
+
+          mapfile -t stable_release_tags <<< "$stable_release_tags_output"
+          checked_release_count=0
+
+          for release_tag in "${stable_release_tags[@]}"; do
+            if [[ "$release_tag" == "$IMAGE_TAG" ]]; then
+              continue
+            fi
+
+            if ! release_sha="$(git rev-parse --verify "refs/tags/${release_tag}^{commit}")"; then
+              echo "::error::Harbor release ${REMOTE_NAME}:${release_tag} has no matching Git tag"
+              exit 1
+            fi
+
+            if ! git merge-base --is-ancestor "$release_sha" refs/remotes/origin/main; then
+              echo "::error::Harbor release ${REMOTE_NAME}:${release_tag} points to commit ${release_sha}, which is not contained in main"
+              exit 1
+            fi
+
+            checked_release_count=$((checked_release_count + 1))
+
+            if ! git merge-base --is-ancestor "$release_sha" "$SOURCE_SHA"; then
+              echo "::error::Release commit ${SOURCE_SHA} predates or diverges from Harbor release ${REMOTE_NAME}:${release_tag} (${release_sha})"
+              exit 1
+            fi
+          done
+
+          if [[ "$checked_release_count" -eq 0 ]]; then
+            echo "No previous stable release tags found in ${REMOTE_NAME}; skipping rollback check"
+          else
+            echo "Release commit ${SOURCE_SHA} follows all stable releases already published to ${REMOTE_NAME}"
+          fi
 
       - name: Push Docker image
         id: push

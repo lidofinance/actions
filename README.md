@@ -85,14 +85,22 @@ For `prod` and `critical`:
   Release;
 - the workflow checks out the tag, not the branch head;
 - the tagged commit must be contained in `main`;
-- the tagged commit must not predate or diverge from any other published stable
-  GitHub Release whose commit is contained in `main`;
+- the tagged commit must not predate or diverge from any stable release already
+  published to the target Harbor repository;
 - the tag and GitHub Release are checked again before the build.
 
 The production source branch is intentionally fixed to `main` and does not
 follow `github.event.repository.default_branch`. If `main` does not exist, the
 workflow stops with a message asking the repository owner to create or rename
 the production branch.
+
+For rollback protection, the workflow reads stable SemVer tags from the target
+Harbor repository after the image has been built and scanned, but before it is
+pushed. Each existing Harbor tag must have a matching Git tag from `main`, and
+its commit must be an ancestor of the candidate commit. Missing or inconsistent
+history and Harbor authentication or API failures stop publication. Changing a
+GitHub Release to prerelease therefore cannot remove an already published image
+from the anti-rollback history.
 
 For `dev` and `staging`, the workflow builds `github.sha` from the branch that
 started the caller workflow. The `tag` input is forbidden. Access to the Harbor
@@ -168,9 +176,12 @@ vulnerability policy for published images.
   `harbor_crit_release`.
 - Enable Harbor tag immutability for production and critical repositories. The
   workflow does not use `docker manifest inspect` as an overwrite protection.
+- Keep immutable production and critical images in Harbor. Their stable SemVer
+  tags are the authoritative anti-rollback history used by the workflow.
 - Protect release tags in GitHub against update and deletion. Restrict creation
   of release tag patterns to trusted maintainers or release automation.
-- Scope each Harbor robot credential to the intended team project and target.
+- Scope each Harbor robot credential to the intended team project and target,
+  with pull and push access to its repositories.
 
 ### Usage examples
 
