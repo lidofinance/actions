@@ -64,6 +64,8 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           TAG: ${{ inputs.tag }}
           TARGET: ${{ inputs.target }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
         run: |
           set -euo pipefail
 
@@ -114,8 +116,13 @@ jobs:
           fi
 
           if [[ "$is_release" == "true" ]]; then
-            if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
-              echo "::error::${TARGET} builds must be started with workflow_dispatch"
+            if [[ "$GITHUB_EVENT_NAME" != "workflow_run" ]]; then
+              echo "::error::${TARGET} builds must be started by a workflow_run"
+              exit 1
+            fi
+
+            if [[ "$UPSTREAM_EVENT" != "release" || "$UPSTREAM_CONCLUSION" != "success" ]]; then
+              echo "::error::${TARGET} builds require a successful upstream workflow triggered by a release event"
               exit 1
             fi
 
@@ -188,7 +195,7 @@ jobs:
           fi
 
           if [[ "$IS_RELEASE" == "true" && "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::Production and critical builds must be dispatched from the main branch"
+            echo "::error::Production and critical builds must run from main through workflow_run"
             exit 1
           fi
 

@@ -78,8 +78,9 @@ fixed token name for the requested target; the caller cannot choose either one.
 
 For `prod` and `critical`:
 
-- the caller must use `workflow_dispatch` and the run must be dispatched from
-  the `main` branch;
+- the caller must use `workflow_run` after a successful workflow triggered by a
+  published GitHub Release;
+- the `workflow_run` caller must run from the `main` branch;
 - the `tag` input must use stable SemVer form such as `v1.2.3` or `1.2.3`;
 - the tag must belong to an existing published, non-draft, non-prerelease GitHub
   Release;
@@ -187,32 +188,117 @@ vulnerability policy for published images.
 
 #### Production or critical release image
 
-The production build is started manually after the stable GitHub Release has
-been published. Select `main` in the **Run workflow** branch selector and enter
-the release tag.
+Production uses two caller workflows. The first one runs for a published GitHub
+Release and stores its tag as a short-lived artifact without access to Harbor
+credentials.
 
 ```yaml
-name: Build production image
-
-run-name: Build production image ${{ inputs.tag }}
+name: Run_on_release
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Published stable GitHub Release tag
-        required: true
-        type: string
+  release:
+    types:
+      - published
 
 permissions:
   contents: read
 
 jobs:
+  save-release-tag:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Validate and save stable release tag
+        shell: bash
+        env:
+          RELEASE_DRAFT: ${{ github.event.release.draft }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$RELEASE_DRAFT" != "false" || "$RELEASE_PRERELEASE" != "false" ]]; then
+            echo "::error::Only published stable releases can start a production build"
+            exit 1
+          fi
+
+          if [[ ! "$RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must use stable SemVer such as v1.2.3 or 1.2.3"
+            exit 1
+          fi
+
+          printf '%s\n' "$RELEASE_TAG" > release_tag.txt
+
+      - name: Upload release tag
+        uses: actions/upload-artifact@<full-commit-sha>
+        with:
+          name: production-release-tag
+          path: release_tag.txt
+          if-no-files-found: error
+          retention-days: 1
+```
+
+The second workflow starts from the protected default branch after the first
+workflow succeeds. It downloads and validates the exact artifact from the
+triggering run, then passes the tag to the reusable workflow.
+
+```yaml
+name: triggered_release
+
+on:
+  workflow_run:
+    workflows:
+      - Run_on_release
+    types:
+      - completed
+
+permissions: {}
+
+jobs:
+  release-tag:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Download release tag
+        uses: actions/download-artifact@<full-commit-sha>
+        with:
+          name: production-release-tag
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/release-artifact
+
+      - name: Validate release tag
+        id: release
+        shell: bash
+        env:
+          TAG_FILE: ${{ runner.temp }}/release-artifact/release_tag.txt
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f "$TAG_FILE" || -L "$TAG_FILE" ]]; then
+            echo "::error::Release tag artifact is not a regular file"
+            exit 1
+          fi
+
+          mapfile -t lines < "$TAG_FILE"
+          if [[ "${#lines[@]}" -ne 1 || ! "${lines[0]}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag artifact must contain exactly one stable SemVer tag"
+            exit 1
+          fi
+
+          echo "tag=${lines[0]}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: release-tag
+    permissions:
+      contents: read
     uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@<full-commit-sha>
     with:
       target: prod
-      tag: ${{ inputs.tag }}
+      tag: ${{ needs.release-tag.outputs.tag }}
       harbor_project: <harbor-project>
       image: <image-name>
       # dockerfile: path/to/Dockerfile
