@@ -66,6 +66,8 @@ jobs:
           TARGET: ${{ inputs.target }}
           UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
+          UPSTREAM_PATH: ${{ github.event.workflow_run.path }}
+          UPSTREAM_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
         run: |
           set -euo pipefail
 
@@ -126,6 +128,17 @@ jobs:
               exit 1
             fi
 
+            upstream_path="${UPSTREAM_PATH%%@*}"
+            if [[ "$upstream_path" != ".github/workflows/run_on_release.yaml" ]]; then
+              echo "::error::Unexpected upstream workflow '${UPSTREAM_PATH}'"
+              exit 1
+            fi
+
+            if [[ "$UPSTREAM_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
+              echo "::error::Upstream workflow belongs to unexpected repository '${UPSTREAM_REPOSITORY}'"
+              exit 1
+            fi
+
             if [[ ! "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "::error::${TARGET} requires a stable release tag such as v1.2.3 or 1.2.3"
               exit 1
@@ -178,11 +191,17 @@ jobs:
           IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
           IS_RELEASE: ${{ steps.config.outputs.is_release }}
           SOURCE_BRANCH: ${{ steps.config.outputs.source_branch }}
+          UPSTREAM_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
 
           source_sha="$(git rev-parse --verify 'HEAD^{commit}')"
           branch_ref="refs/remotes/origin/${SOURCE_BRANCH}"
+
+          if [[ "$IS_RELEASE" == "true" && "$UPSTREAM_SHA" != "$source_sha" ]]; then
+            echo "::error::Release tag commit ${source_sha} does not match upstream workflow_run commit ${UPSTREAM_SHA}"
+            exit 1
+          fi
 
           if ! git show-ref --verify --quiet "$branch_ref"; then
             if [[ "$IS_RELEASE" == "true" ]]; then

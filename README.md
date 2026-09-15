@@ -80,11 +80,14 @@ For `prod` and `critical`:
 
 - the caller must use `workflow_run` after a successful workflow triggered by a
   published GitHub Release;
+- the upstream workflow must be `.github/workflows/run_on_release.yaml` in the
+  calling repository;
 - the `workflow_run` caller must run from the `main` branch;
 - the `tag` input must use stable SemVer form such as `v1.2.3` or `1.2.3`;
 - the tag must belong to an existing published, non-draft, non-prerelease GitHub
   Release;
 - the workflow checks out the tag, not the branch head;
+- the tagged commit must match the upstream `workflow_run.head_sha`;
 - the tagged commit must be contained in `main`;
 - the tagged commit must not predate or diverge from any stable release already
   published to the target Harbor repository;
