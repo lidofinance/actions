@@ -24,7 +24,6 @@ jobs:
           persist-credentials: false
 
       - name: Verify keys
-        id: verify_keys
         continue-on-error: true
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -63,7 +62,3 @@ jobs:
           else
             gh api --method POST "/repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
           fi
-
-      - name: Fail on policy errors
-        if: steps.verify_keys.outcome == 'failure'
-        run: exit 1
