@@ -82,29 +82,33 @@ For `prod` and `critical`:
   published GitHub Release;
 - the upstream workflow must be `.github/workflows/run_on_release.yaml` in the
   calling repository;
-- the `workflow_run` caller must run from the `main` branch;
+- the `workflow_run` caller must run from the repository's protected default
+  branch;
 - the `tag` input must use stable SemVer form such as `v1.2.3` or `1.2.3`;
 - the tag must belong to an existing published, non-draft, non-prerelease GitHub
   Release;
 - the workflow checks out the tag, not the branch head;
 - the tagged commit must match the upstream `workflow_run.head_sha`;
-- the tagged commit must be contained in `main`;
+- exactly one production source branch, `main` or `master`, must exist;
+- the tagged commit must be contained in that production source branch;
 - the tagged commit must not predate or diverge from any stable release already
   published to the target Harbor repository;
 - the tag and GitHub Release are checked again before the build.
 
-The production source branch is intentionally fixed to `main` and does not
-follow `github.event.repository.default_branch`. If `main` does not exist, the
-workflow stops with a message asking the repository owner to create or rename
-the production branch.
+The branch that runs the trusted caller and the branch that contains production
+source are intentionally independent. GitHub starts `workflow_run` from the
+repository's default branch, which may have any valid name. The reusable
+workflow verifies this relationship but checks the release commit against the
+single existing `main` or `master` branch. If both production branch names exist
+or neither exists, publication stops.
 
 For rollback protection, the workflow reads stable SemVer tags from the target
 Harbor repository after the image has been built and scanned, but before it is
-pushed. Each existing Harbor tag must have a matching Git tag from `main`, and
-its commit must be an ancestor of the candidate commit. Missing or inconsistent
-history and Harbor authentication or API failures stop publication. Changing a
-GitHub Release to prerelease therefore cannot remove an already published image
-from the anti-rollback history.
+pushed. Each existing Harbor tag must have a matching Git tag from the selected
+production source branch, and its commit must be an ancestor of the candidate
+commit. Missing or inconsistent history and Harbor authentication or API
+failures stop publication. Changing a GitHub Release to prerelease therefore
+cannot remove an already published image from the anti-rollback history.
 
 For `dev` and `staging`, the workflow builds `github.sha` from the branch that
 started the caller workflow. The `tag` input is forbidden. Access to the Harbor
@@ -176,8 +180,12 @@ vulnerability policy for published images.
   mapping table.
 - Configure each Environment's deployment branch rules. Required reviewers are
   optional; the workflow itself does not require a manual approval.
-- Allow only `main` to deploy through `harbor_prod_release` and
-  `harbor_crit_release`.
+- Allow only the repository's protected default branch to deploy through
+  `harbor_prod_release` and `harbor_crit_release`. This may differ from the
+  production source branch.
+- Protect both reserved production branch names, `main` and `master`, against
+  unauthorized creation, deletion, and force-push. Keep exactly one of them in
+  each application repository.
 - Enable Harbor tag immutability for production and critical repositories. The
   workflow does not use `docker manifest inspect` as an overwrite protection.
 - Keep immutable production and critical images in Harbor. Their stable SemVer

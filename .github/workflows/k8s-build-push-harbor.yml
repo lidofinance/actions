@@ -49,7 +49,7 @@ jobs:
       image_tag: ${{ steps.config.outputs.image_tag }}
       is_release: ${{ steps.config.outputs.is_release }}
       remote_name: ${{ steps.config.outputs.remote_name }}
-      source_branch: ${{ steps.config.outputs.source_branch }}
+      source_branch: ${{ steps.source.outputs.source_branch }}
       source_sha: ${{ steps.source.outputs.source_sha }}
 
     steps:
@@ -57,6 +57,7 @@ jobs:
         id: config
         shell: bash
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           DOCKERFILE: ${{ inputs.dockerfile }}
           HARBOR_PROJECT: ${{ inputs.harbor_project }}
           IMAGE: ${{ inputs.image }}
@@ -144,7 +145,17 @@ jobs:
               exit 1
             fi
 
-            source_branch="main"
+            if [[ -z "$DEFAULT_BRANCH" ]] || ! git check-ref-format --branch "$DEFAULT_BRANCH" >/dev/null; then
+              echo "::error::Repository default branch '${DEFAULT_BRANCH}' is invalid"
+              exit 1
+            fi
+
+            if [[ "$REF_TYPE" != "branch" || "$REF_NAME" != "$DEFAULT_BRANCH" ]]; then
+              echo "::error::${TARGET} builds must run from the repository default branch '${DEFAULT_BRANCH}' through workflow_run"
+              exit 1
+            fi
+
+            requested_source_branch=""
             source_ref="$TAG"
           else
             if [[ -n "$TAG" ]]; then
@@ -157,9 +168,9 @@ jobs:
               exit 1
             fi
 
-            source_branch="$REF_NAME"
-            if ! git check-ref-format --branch "$source_branch" >/dev/null; then
-              echo "::error::Invalid source branch '${source_branch}'"
+            requested_source_branch="$REF_NAME"
+            if ! git check-ref-format --branch "$requested_source_branch" >/dev/null; then
+              echo "::error::Invalid source branch '${requested_source_branch}'"
               exit 1
             fi
             source_ref="$GITHUB_SHA"
@@ -172,7 +183,7 @@ jobs:
             echo "image_tag=${image_tag}"
             echo "is_release=${is_release}"
             echo "remote_name=${remote_name}"
-            echo "source_branch=${source_branch}"
+            echo "requested_source_branch=${requested_source_branch}"
             echo "source_ref=${source_ref}"
           } >> "$GITHUB_OUTPUT"
 
@@ -190,36 +201,51 @@ jobs:
         env:
           IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
           IS_RELEASE: ${{ steps.config.outputs.is_release }}
-          SOURCE_BRANCH: ${{ steps.config.outputs.source_branch }}
+          REQUESTED_SOURCE_BRANCH: ${{ steps.config.outputs.requested_source_branch }}
           UPSTREAM_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
 
           source_sha="$(git rev-parse --verify 'HEAD^{commit}')"
-          branch_ref="refs/remotes/origin/${SOURCE_BRANCH}"
 
           if [[ "$IS_RELEASE" == "true" && "$UPSTREAM_SHA" != "$source_sha" ]]; then
             echo "::error::Release tag commit ${source_sha} does not match upstream workflow_run commit ${UPSTREAM_SHA}"
             exit 1
           fi
 
-          if ! git show-ref --verify --quiet "$branch_ref"; then
-            if [[ "$IS_RELEASE" == "true" ]]; then
-              echo "::error::Required production branch main does not exist in ${GITHUB_REPOSITORY}"
-              echo "::error::Create or rename the production branch to main before publishing releases"
-            else
-              echo "::error::Branch ${SOURCE_BRANCH} does not exist in ${GITHUB_REPOSITORY}"
-            fi
-            exit 1
+          if [[ "$IS_RELEASE" == "true" ]]; then
+            release_branches=()
+            for branch in main master; do
+              if git show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
+                release_branches+=("$branch")
+              fi
+            done
+
+            case "${#release_branches[@]}" in
+              0)
+                echo "::error::Neither production branch main nor master exists in ${GITHUB_REPOSITORY}"
+                exit 1
+                ;;
+              1)
+                source_branch="${release_branches[0]}"
+                ;;
+              *)
+                echo "::error::Both production branches main and master exist in ${GITHUB_REPOSITORY}; keep exactly one"
+                exit 1
+                ;;
+            esac
+          else
+            source_branch="$REQUESTED_SOURCE_BRANCH"
           fi
 
-          if [[ "$IS_RELEASE" == "true" && "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::Production and critical builds must run from main through workflow_run"
+          branch_ref="refs/remotes/origin/${source_branch}"
+          if ! git show-ref --verify --quiet "$branch_ref"; then
+            echo "::error::Branch ${source_branch} does not exist in ${GITHUB_REPOSITORY}"
             exit 1
           fi
 
           if ! git merge-base --is-ancestor "$source_sha" "$branch_ref"; then
-            echo "::error::Commit ${source_sha} is not contained in branch ${SOURCE_BRANCH}"
+            echo "::error::Commit ${source_sha} is not contained in branch ${source_branch}"
             exit 1
           fi
 
@@ -231,6 +257,7 @@ jobs:
             fi
           fi
 
+          echo "source_branch=${source_branch}" >> "$GITHUB_OUTPUT"
           echo "source_sha=${source_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Validate published GitHub Release
@@ -270,15 +297,45 @@ jobs:
           fetch-tags: true
           persist-credentials: false
 
-      - name: Revalidate release tag
+      - name: Revalidate release source
         if: ${{ needs.validate.outputs.is_release == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          SOURCE_BRANCH: ${{ needs.validate.outputs.source_branch }}
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
         run: |
           set -euo pipefail
+
+          release_branches=()
+          for branch in main master; do
+            if git show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
+              release_branches+=("$branch")
+            fi
+          done
+
+          case "${#release_branches[@]}" in
+            0)
+              echo "::error::Production branch ${SOURCE_BRANCH} disappeared after validation"
+              exit 1
+              ;;
+            1)
+              if [[ "${release_branches[0]}" != "$SOURCE_BRANCH" ]]; then
+                echo "::error::Production branch changed from ${SOURCE_BRANCH} to ${release_branches[0]} after validation"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Both production branches main and master exist after validation; keep exactly one"
+              exit 1
+              ;;
+          esac
+
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" "refs/remotes/origin/${SOURCE_BRANCH}"; then
+            echo "::error::Release commit ${SOURCE_SHA} is no longer contained in branch ${SOURCE_BRANCH}"
+            exit 1
+          fi
 
           tag_sha="$(git rev-parse --verify "refs/tags/${IMAGE_TAG}^{commit}")"
           if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
@@ -504,6 +561,7 @@ jobs:
           IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
           REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
           REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}
+          SOURCE_BRANCH: ${{ needs.validate.outputs.source_branch }}
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
         run: |
           set -euo pipefail
@@ -566,8 +624,8 @@ jobs:
               exit 1
             fi
 
-            if ! git merge-base --is-ancestor "$release_sha" refs/remotes/origin/main; then
-              echo "::error::Harbor release ${REMOTE_NAME}:${release_tag} points to commit ${release_sha}, which is not contained in main"
+            if ! git merge-base --is-ancestor "$release_sha" "refs/remotes/origin/${SOURCE_BRANCH}"; then
+              echo "::error::Harbor release ${REMOTE_NAME}:${release_tag} points to commit ${release_sha}, which is not contained in ${SOURCE_BRANCH}"
               exit 1
             fi
 
