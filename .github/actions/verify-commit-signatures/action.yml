@@ -1,5 +1,5 @@
 name: Verify commit signatures
-description: Verify PR commit signatures against repository-authorized GPG public keys
+description: Verify PR commit signatures against all trusted GPG public keys
 
 inputs:
   base-sha:
@@ -18,4 +18,3 @@ runs:
       env:
         BASE_SHA: ${{ inputs.base-sha }}
         HEAD_SHA: ${{ inputs.head-sha }}
-        GITHUB_REPOSITORY: ${{ github.repository }}

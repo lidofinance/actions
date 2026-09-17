@@ -7,8 +7,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-from config import GITHUB_WEB_FLOW_PRIMARY_FINGERPRINTS, REPOSITORIES
 from src.commands import VerificationError, run_command
+from src.gpg import find_public_key_files
+
+
+# Public key source: https://github.com/web-flow.gpg
+GITHUB_WEB_FLOW_PRIMARY_FINGERPRINTS = frozenset({
+    "5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23",
+    "968479A1AFF927E37D1A566BB5690EEEBB952194",
+})
 
 
 BAD_GPG_STATUSES = (
@@ -114,26 +121,8 @@ def main() -> None:
         "git", "rev-parse", "--verify", "--end-of-options", f"{head_sha}^{{commit}}"
     ).stdout.strip()
 
-    repository = os.environ.get("GITHUB_REPOSITORY", "")
-    if not repository or repository.startswith("/") or repository.endswith("/") or repository.count("/") > 1:
-        raise VerificationError(f"invalid GITHUB_REPOSITORY value: {repository!r}")
-    policy = REPOSITORIES.get(repository) or REPOSITORIES.get(repository.rsplit("/", 1)[-1])
-    if policy is None:
-        raise VerificationError(f"no signer policy is configured for repository {repository!r}")
-
     key_root = Path(__file__).with_name("trusted-gpg-keys")
-    public_key_files: list[Path] = []
-    for group in policy.signers:
-        group_directory = key_root / group
-        if not group_directory.is_dir():
-            raise VerificationError(f"configured signer group {group!r} has no public-key directory")
-        public_key_files.extend(
-            source for source in sorted(group_directory.glob("*.asc")) if source.is_file()
-        )
-    if not public_key_files:
-        raise VerificationError(
-            "the configured signer groups contain no ASCII-armored public keys"
-        )
+    public_key_files = find_public_key_files(key_root)
 
     with tempfile.TemporaryDirectory(prefix="commit-signature-verification-") as temporary:
         gpg_home = Path(temporary) / "gnupg"
@@ -173,9 +162,7 @@ def main() -> None:
         errors: list[str] = []
         for commit in commits:
             try:
-                primary_fingerprint = verify_commit_signature(
-                    commit, gpg_env, allowed_primary_keys
-                )
+                primary_fingerprint = verify_commit_signature(commit, gpg_env, allowed_primary_keys)
             except VerificationError as error:
                 errors.append(str(error))
                 continue

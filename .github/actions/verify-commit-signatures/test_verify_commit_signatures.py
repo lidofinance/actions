@@ -19,37 +19,39 @@ VERIFIER = ACTION_DIRECTORY / "verify_commit_signatures.py"
 @unittest.skipUnless(shutil.which("git") and shutil.which("gpg"), "git and gpg are required")
 class VerifyCommitSignaturesTest(unittest.TestCase):
     def setUp(self) -> None:
-        """Create isolated keys, trusted-key configuration, and a Git fixture."""
+        """Create isolated keys, trusted-key exports, and a Git fixture."""
         self.temporary = tempfile.TemporaryDirectory(prefix="verify-commit-signatures-test-")
         self.root = Path(self.temporary.name)
         self.gpg_home = self.root / "signing-gnupg"
         self.gpg_home.mkdir(mode=0o700)
         self.gpg_env = os.environ | {"GNUPGHOME": str(self.gpg_home)}
         self.trusted_fingerprint = self.generate_signing_key("Trusted signer <trusted@example.invalid>")
+        self.additional_fingerprint = self.generate_signing_key("Additional signer <additional@example.invalid>")
         self.unknown_fingerprint = self.generate_signing_key("Unknown signer <unknown@example.invalid>")
         self.github_fingerprint = self.generate_signing_key("GitHub test signer <github@example.invalid>")
 
         implementation_directory = self.root / "implementation"
         implementation_directory.mkdir()
         self.verifier = implementation_directory / "verify_commit_signatures.py"
-        shutil.copy2(VERIFIER, self.verifier)
+        self.verifier.write_text(
+            VERIFIER.read_text(encoding="utf-8")
+            .replace("5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23", self.github_fingerprint)
+            .replace("968479A1AFF927E37D1A566BB5690EEEBB952194", self.github_fingerprint),
+            encoding="utf-8",
+        )
         shutil.copytree(ACTION_DIRECTORY / "src", implementation_directory / "src")
         trusted_key_directory = implementation_directory / "trusted-gpg-keys" / "webexp"
         trusted_key_directory.mkdir(parents=True)
         (trusted_key_directory / "trusted.asc").write_text(
             self.export_public_key(self.trusted_fingerprint), encoding="utf-8"
         )
+        additional_key_directory = implementation_directory / "trusted-gpg-keys" / "another-group"
+        additional_key_directory.mkdir()
+        (additional_key_directory / "additional.asc").write_text(
+            self.export_public_key(self.additional_fingerprint), encoding="utf-8"
+        )
         (implementation_directory / "github-web-flow.asc").write_text(
             self.export_public_key(self.github_fingerprint), encoding="utf-8"
-        )
-        (implementation_directory / "config.py").write_text(
-            "from dataclasses import dataclass\n\n"
-            "@dataclass(frozen=True)\n"
-            "class RepositoryPolicy:\n"
-            "    signers: tuple[str, ...]\n\n"
-            f"GITHUB_WEB_FLOW_PRIMARY_FINGERPRINTS = frozenset({{{self.github_fingerprint!r}}})\n\n"
-            "REPOSITORIES = {'test-repository': RepositoryPolicy(signers=('webexp',))}\n",
-            encoding="utf-8",
         )
 
         self.repo = self.root / "repo"
@@ -128,7 +130,6 @@ class VerifyCommitSignaturesTest(unittest.TestCase):
             env=os.environ | {
                 "BASE_SHA": base or self.base,
                 "HEAD_SHA": head or self.run_fixture_git("rev-parse", "HEAD").stdout.strip(),
-                "GITHUB_REPOSITORY": "example/test-repository",
                 "GNUPGHOME": str(self.gpg_home),
             },
             check=False,
@@ -141,8 +142,14 @@ class VerifyCommitSignaturesTest(unittest.TestCase):
         self.assertIn(expected, result.stdout + result.stderr)
 
     def test_trusted_signed_commit_is_accepted(self) -> None:
-        """Accept a PR commit signed by the configured public key."""
+        """Accept a PR commit signed by a trusted public key."""
         self.create_commit("Trusted change", change="trusted\n")
+        result = self.run_verifier()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_key_from_any_group_is_accepted(self) -> None:
+        """Authorize every trusted public-key export, regardless of its group."""
+        self.create_commit("Additional change", signer=self.additional_fingerprint, change="additional\n")
         result = self.run_verifier()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -200,20 +207,19 @@ class VerifyCommitSignaturesTest(unittest.TestCase):
         result = self.run_verifier(head=head, base=advanced_base)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_no_policy_for_repository_is_rejected(self) -> None:
-        """Fail closed when no signer policy applies to a repository."""
+    def test_github_repository_is_not_an_input(self) -> None:
+        """Do not require repository-specific signer selection."""
+        self.create_commit("Trusted change", change="trusted\n")
         result = self.run_fixture_command(
             sys.executable,
             str(self.verifier),
             env=os.environ | {
                 "BASE_SHA": self.base,
-                "HEAD_SHA": self.base,
-                "GITHUB_REPOSITORY": "example/not-configured",
+                "HEAD_SHA": self.run_fixture_git("rev-parse", "HEAD").stdout.strip(),
             },
             check=False,
         )
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("no signer policy is configured", result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
