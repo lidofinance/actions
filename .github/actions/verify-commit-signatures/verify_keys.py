@@ -8,7 +8,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from config import REPOSITORIES, RepositoryPolicy
 from src.commands import VerificationError, run_command
 from src.gpg import (
     PrimaryKey,
@@ -37,7 +36,6 @@ class ContributorKeyFile:
     """The parsed current state of one contributor's public-key export."""
 
     identity: str
-    group: str
     keys: dict[str, PrimaryKey]
     shared_uids: set[str]
     active_subkeys: list[Subkey]
@@ -61,9 +59,7 @@ def active_signing_subkeys(entry: ContributorKeyFile) -> list[Subkey]:
     return [subkey for subkey in entry.active_subkeys if subkey.can_sign]
 
 
-def check_current_key_file(
-    entry: ContributorKeyFile, configured_groups: frozenset[str], now: int
-) -> list[Finding]:
+def check_current_key_file(entry: ContributorKeyFile, now: int) -> list[Finding]:
     """Apply current-state policy to one contributor's public-key export."""
     findings: list[Finding] = []
     if not entry.shared_uids:
@@ -120,14 +116,6 @@ def check_current_key_file(
                     f"{entry.identity}: signing subkey {subkey.fingerprint} is valid for more than one year",
                 )
             )
-    if entry.group not in configured_groups:
-        findings.append(
-            Finding(
-                "warning",
-                f"{entry.identity}: signer group {entry.group!r} is not used by any repository policy",
-            )
-        )
-
     active = active_signing_subkeys(entry)
     if not active:
         findings.append(Finding("error", f"{entry.identity}: has no active signing subkey"))
@@ -241,7 +229,6 @@ def check_key_lifecycle_changes(
         old = before.get(identity)
         new = after.get(identity)
         if old is None:
-            findings.append(Finding("warning", f"{identity}: contributor export added"))
             continue
         if new is None:
             findings.append(Finding("warning", f"{identity}: contributor export removed"))
@@ -348,7 +335,6 @@ def build_key_snapshot(key_root: Path, now: int) -> KeySnapshot:
         identity = relative.with_suffix("").as_posix()
         entries[identity] = ContributorKeyFile(
             identity=identity,
-            group=relative.parts[0],
             keys={primary.fingerprint: primary for primary in primary_keys},
             shared_uids=set.intersection(*(primary.uids for primary in primary_keys)),
             active_subkeys=[
@@ -391,26 +377,13 @@ def materialize_base_key_root(
 
 
 def collect_policy_findings(
-    before: KeySnapshot | None,
-    after: KeySnapshot,
-    repositories: dict[str, RepositoryPolicy],
-    now: int,
+    before: KeySnapshot | None, after: KeySnapshot, now: int
 ) -> list[Finding]:
-    """Run every policy rule against the base and current key snapshots."""
-    configured_groups = frozenset(
-        group for policy in repositories.values() for group in policy.signers
-    )
+    """Check exports added or changed since the base and describe their lifecycle."""
     findings: list[Finding] = []
-    for entry in after.values():
-        findings.extend(check_current_key_file(entry, configured_groups, now))
-    findings.extend(
-        Finding("error", f"configured signer group {group!r} has no active signing subkey")
-        for group in configured_groups
-        if not any(
-            entry.group == group and active_signing_subkeys(entry)
-            for entry in after.values()
-        )
-    )
+    for identity, entry in after.items():
+        if before is None or before.get(identity) != entry:
+            findings.extend(check_current_key_file(entry, now))
     findings.extend(check_key_lifecycle_changes(before, after))
     return findings
 
@@ -465,7 +438,7 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="gpg-key-policy-base-") as temporary:
             base_root = Path(temporary) / "trusted-gpg-keys"
             before = build_key_snapshot(base_root, now) if materialize_base_key_root(base_sha, key_root, base_root) else None
-        findings = collect_policy_findings(before, current, REPOSITORIES, now)
+        findings = collect_policy_findings(before, current, now)
         content = render_report(current, findings)
     except VerificationError as error:
         findings = [Finding("error", str(error))]
