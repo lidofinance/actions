@@ -1,0 +1,37 @@
+name: Test K8s workflow security logic
+
+on:
+  pull_request:
+    paths:
+      - ".github/tests/test_k8s_build_push_harbor.py"
+      - ".github/workflows/ci-k8s-workflow-unit-tests.yml"
+      - ".github/workflows/k8s-build-push-harbor.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/tests/test_k8s_build_push_harbor.py"
+      - ".github/workflows/ci-k8s-workflow-unit-tests.yml"
+      - ".github/workflows/k8s-build-push-harbor.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test security validation
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run unit tests
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover --start-directory .github/tests --pattern 'test_*.py' --verbose
