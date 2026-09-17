@@ -22,7 +22,8 @@ jobs:
           persist-credentials: false
 
       - name: Verify introduced commit signatures
-        uses: lidofinance/actions/.github/actions/verify-commit-signatures@91192562f394f8d9844075fc1e8ba7586a309682
+        # used main branch instead of hash during an initial rollout, with the `permissions: contents: read` it's harmless
+        uses: lidofinance/actions/.github/actions/verify-commit-signatures@main
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
