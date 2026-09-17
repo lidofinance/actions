@@ -1,0 +1,84 @@
+name: Lint K8s workflows
+
+on:
+  pull_request:
+    paths:
+      - ".github/scripts/check-workflow-pins.py"
+      - ".github/workflows/ci-k8s-workflow-lint.yml"
+      - ".github/workflows/k8s-build-push-harbor.yml"
+      - ".yamllint"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/scripts/check-workflow-pins.py"
+      - ".github/workflows/ci-k8s-workflow-lint.yml"
+      - ".github/workflows/k8s-build-push-harbor.yml"
+      - ".yamllint"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint K8s workflows
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run actionlint and ShellCheck
+        shell: bash
+        env:
+          ACTIONLINT_IMAGE: rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667  # v1.7.12
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            --network none \
+            --volume "${GITHUB_WORKSPACE}:/repo:ro" \
+            --workdir /repo \
+            "$ACTIONLINT_IMAGE" \
+            -color \
+            .github/workflows/ci-k8s-workflow-lint.yml \
+            .github/workflows/k8s-build-push-harbor.yml
+
+      - name: Run yamllint
+        shell: bash
+        env:
+          YAMLLINT_VERSION: 1.38.0
+        run: |
+          set -euo pipefail
+
+          python3 -m venv "${RUNNER_TEMP}/yamllint"
+          "${RUNNER_TEMP}/yamllint/bin/pip" install --disable-pip-version-check --no-cache-dir "yamllint==${YAMLLINT_VERSION}"
+          "${RUNNER_TEMP}/yamllint/bin/yamllint" --config-file .yamllint \
+            .github/workflows/ci-k8s-workflow-lint.yml \
+            .github/workflows/k8s-build-push-harbor.yml
+
+      - name: Check immutable action references
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 .github/scripts/check-workflow-pins.py \
+            .github/workflows/ci-k8s-workflow-lint.yml \
+            .github/workflows/k8s-build-push-harbor.yml
+
+      - name: Check whitespace errors
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${BASE_SHA}^{commit}"; then
+            git diff --check "${BASE_SHA}...HEAD"
+          else
+            git show --check --format= HEAD
+          fi
