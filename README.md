@@ -31,6 +31,12 @@ jobs:
 This reusable workflow validates application source, builds a Docker image, and
 pushes it to the predefined Harbor registry for the selected target.
 
+Security-sensitive validation and Harbor anti-rollback checks are implemented
+in a standard-library-only Python helper. Its runtime and reusable action
+revision are pinned, and its logic is covered by unit and workflow-contract
+tests. The workflow YAML retains orchestration steps such as checkout, Docker
+build, Trivy execution, registry login, and push.
+
 It is intended to be called from application repositories through
 `jobs.<job_id>.uses`. The caller selects the target, Harbor project, image name,
 and Dockerfile. Registry addresses, GitHub Environment names, credential names,
