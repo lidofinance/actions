@@ -3,6 +3,7 @@ name: Test K8s workflow security logic
 on:
   pull_request:
     paths:
+      - ".github/actions/k8s-harbor-helper/**"
       - ".github/tests/test_k8s_build_push_harbor.py"
       - ".github/workflows/ci-k8s-workflow-unit-tests.yml"
       - ".github/workflows/k8s-build-push-harbor.yml"
@@ -10,6 +11,7 @@ on:
     branches:
       - main
     paths:
+      - ".github/actions/k8s-harbor-helper/**"
       - ".github/tests/test_k8s_build_push_harbor.py"
       - ".github/workflows/ci-k8s-workflow-unit-tests.yml"
       - ".github/workflows/k8s-build-push-harbor.yml"
@@ -34,4 +36,7 @@ jobs:
         shell: bash
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python3 -m unittest discover --start-directory .github/tests --pattern 'test_*.py' --verbose
+          PYTHONPATH: .github/actions/k8s-harbor-helper
+        run: |
+          python3 -m unittest discover --start-directory .github/tests --pattern 'test_*.py' --verbose
+          python3 -m unittest discover --start-directory .github/actions/k8s-harbor-helper/tests --pattern 'test_*.py' --verbose
