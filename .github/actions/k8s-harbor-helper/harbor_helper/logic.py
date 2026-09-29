@@ -611,6 +611,20 @@ def harbor_getter(
     )
 
 
+def _registry_error_codes(payload: object) -> set[str]:
+    if not isinstance(payload, dict):
+        return set()
+    errors = payload.get("errors")
+    if not isinstance(errors, list):
+        return set()
+    return {
+        code
+        for error in errors
+        if isinstance(error, dict)
+        and isinstance((code := error.get("code")), str)
+    }
+
+
 def check_rollback(
     environment: Mapping[str, str],
     *,
@@ -629,17 +643,16 @@ def check_rollback(
         required(environment, "HARBOR_TOKEN"),
         http_get=http_get,
     )
-    if response.status == 404 and isinstance(response.payload, dict):
-        errors = response.payload.get("errors")
-        if isinstance(errors, list) and any(
-            isinstance(error, dict) and error.get("code") == "NAME_UNKNOWN"
-            for error in errors
-        ):
+    error_codes = _registry_error_codes(response.payload)
+    if response.status == 404:
+        if error_codes & {"NAME_UNKNOWN", "NOT_FOUND"}:
             print(f"No existing Harbor repository {remote_name}; skipping rollback check")
             return {}
     if response.status != 200:
+        codes = ", ".join(sorted(error_codes)) or "none"
         raise WorkflowError(
-            f"Harbor returned HTTP {response.status} while listing tags for {remote_name}"
+            f"Harbor returned HTTP {response.status} with error codes {codes} "
+            f"while listing tags for {remote_name}"
         )
     if not isinstance(response.payload, dict) or response.payload.get("name") != repository:
         raise WorkflowError(f"Harbor returned an invalid tag list for {remote_name}")
