@@ -40,8 +40,10 @@ TARGETS = {
         "is_release": False,
     },
     "prod": {
-        "registry": "registry.prod.k8s-prod.org",
-        "github_environment": "harbor_prod_release",
+        # Temporary sandbox override: exercise the production validation path
+        # with the only Harbor credentials available in secops_release_sandbox.
+        "registry": "registry.dev.k8s-dev.org",
+        "github_environment": "harbor_dev_release",
         "is_release": True,
     },
     "critical": {

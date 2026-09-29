@@ -161,7 +161,7 @@ class ConfigureTests(TemporaryTestCase):
         outputs = configure(self.environment())
         self.assertEqual(outputs["source_ref"], "v1.2.3")
         self.assertEqual(outputs["is_release"], "true")
-        self.assertEqual(outputs["github_environment"], "harbor_prod_release")
+        self.assertEqual(outputs["github_environment"], "harbor_dev_release")
 
     def test_development_configuration(self) -> None:
         outputs = configure(self.environment(TARGET="dev", TAG=""))

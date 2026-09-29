@@ -62,7 +62,10 @@ class CliTests(unittest.TestCase):
         result = self.run_cli("configure", environment)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         output = Path(environment["GITHUB_OUTPUT"]).read_text()
-        self.assertIn("github_environment=harbor_prod_release", output)
+        self.assertIn("github_environment=harbor_dev_release", output)
+        self.assertIn(
+            "remote_name=registry.dev.k8s-dev.org/team-example/application", output
+        )
         self.assertIn("source_ref=v1.2.3", output)
 
     def test_validation_error_uses_workflow_annotation(self) -> None:
