@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/k8s-build-push-harbor.yml"
-HELPER_SHA = "5b9626ace6d2fe510b571afc22893643a266ddc9"
+HELPER_SHA = "0ab98acb90462a5b37ba4e1f1a8c65e037b642dd"
 HELPER_REFERENCE = "lidofinance/actions/.github/actions/k8s-harbor-helper"
 SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
 

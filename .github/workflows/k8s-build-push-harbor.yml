@@ -60,7 +60,7 @@ jobs:
 
       - name: Configure target and validate inputs
         id: config
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@5b9626ace6d2fe510b571afc22893643a266ddc9
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@0ab98acb90462a5b37ba4e1f1a8c65e037b642dd
         with:
           command: configure
         env:
@@ -90,7 +90,7 @@ jobs:
 
       - name: Validate source
         id: source
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@5b9626ace6d2fe510b571afc22893643a266ddc9
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@0ab98acb90462a5b37ba4e1f1a8c65e037b642dd
         with:
           command: validate-source
         env:
@@ -101,7 +101,7 @@ jobs:
 
       - name: Validate published GitHub Release
         if: ${{ steps.config.outputs.is_release == 'true' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@5b9626ace6d2fe510b571afc22893643a266ddc9
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@0ab98acb90462a5b37ba4e1f1a8c65e037b642dd
         with:
           command: validate-release
         env:
@@ -135,7 +135,7 @@ jobs:
 
       - name: Revalidate release source
         if: ${{ needs.validate.outputs.is_release == 'true' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@5b9626ace6d2fe510b571afc22893643a266ddc9
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@0ab98acb90462a5b37ba4e1f1a8c65e037b642dd
         with:
           command: revalidate-release
         env:
@@ -148,7 +148,7 @@ jobs:
 
       - name: Prepare isolated build context
         id: context
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@5b9626ace6d2fe510b571afc22893643a266ddc9
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@0ab98acb90462a5b37ba4e1f1a8c65e037b642dd
         with:
           command: prepare-context
         env:
@@ -157,7 +157,7 @@ jobs:
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
 
       - name: Populate build-info.json
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@5b9626ace6d2fe510b571afc22893643a266ddc9
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@0ab98acb90462a5b37ba4e1f1a8c65e037b642dd
         with:
           command: populate-build-info
         env:
@@ -220,7 +220,7 @@ jobs:
           retention-days: 30
 
       - name: Summarize vulnerability report
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@5b9626ace6d2fe510b571afc22893643a266ddc9
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@0ab98acb90462a5b37ba4e1f1a8c65e037b642dd
         with:
           command: summarize-trivy
         env:
@@ -260,7 +260,7 @@ jobs:
 
       - name: Prevent release rollback
         if: ${{ needs.validate.outputs.is_release == 'true' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@5b9626ace6d2fe510b571afc22893643a266ddc9
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@0ab98acb90462a5b37ba4e1f1a8c65e037b642dd
         with:
           command: check-rollback
         env:
@@ -286,7 +286,7 @@ jobs:
 
       - name: Resolve published image digest
         id: push
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@5b9626ace6d2fe510b571afc22893643a266ddc9
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@0ab98acb90462a5b37ba4e1f1a8c65e037b642dd
         with:
           command: resolve-image-digest
         env:
