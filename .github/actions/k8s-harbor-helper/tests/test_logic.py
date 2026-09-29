@@ -630,6 +630,26 @@ class RollbackTests(TemporaryTestCase):
         )
         check_rollback(self.environment(), cwd=self.checkout, http_get=responses)
 
+    def test_missing_repository_with_harbor_not_found_is_allowed(self) -> None:
+        responses = ResponseQueue(
+            HttpResponse(200, {"token": "registry-token"}),
+            HttpResponse(404, {"errors": [{"code": "NOT_FOUND"}]}),
+        )
+        check_rollback(self.environment(), cwd=self.checkout, http_get=responses)
+
+    def test_unexpected_not_found_error_is_rejected(self) -> None:
+        responses = ResponseQueue(
+            HttpResponse(200, {"token": "registry-token"}),
+            HttpResponse(404, {"errors": [{"code": "UNAUTHORIZED"}]}),
+        )
+        self.assert_workflow_error(
+            "HTTP 404 with error codes UNAUTHORIZED",
+            check_rollback,
+            self.environment(),
+            cwd=self.checkout,
+            http_get=responses,
+        )
+
     def test_unexpected_harbor_error_is_rejected(self) -> None:
         self.assert_workflow_error(
             "Harbor returned HTTP 500",
