@@ -1,0 +1,55 @@
+name: K8s Harbor workflow helper
+description: Security validation and report processing for the Harbor reusable workflow
+
+inputs:
+  command:
+    description: Helper command to execute
+    required: true
+
+outputs:
+  context_dir:
+    description: Isolated Docker build context
+    value: ${{ steps.helper.outputs.context_dir }}
+  dockerfile:
+    description: Validated Dockerfile path
+    value: ${{ steps.helper.outputs.dockerfile }}
+  github_environment:
+    description: Trusted GitHub Environment for the target
+    value: ${{ steps.helper.outputs.github_environment }}
+  image_digest:
+    description: Published image digest
+    value: ${{ steps.helper.outputs.image_digest }}
+  image_ref:
+    description: Published image reference
+    value: ${{ steps.helper.outputs.image_ref }}
+  image_tag:
+    description: Image tag selected for the target
+    value: ${{ steps.helper.outputs.image_tag }}
+  is_release:
+    description: Whether this is a production-style release
+    value: ${{ steps.helper.outputs.is_release }}
+  remote_name:
+    description: Harbor image name without a tag
+    value: ${{ steps.helper.outputs.remote_name }}
+  requested_source_branch:
+    description: Source branch requested for a non-release build
+    value: ${{ steps.helper.outputs.requested_source_branch }}
+  source_branch:
+    description: Validated source branch
+    value: ${{ steps.helper.outputs.source_branch }}
+  source_ref:
+    description: Git ref selected for checkout
+    value: ${{ steps.helper.outputs.source_ref }}
+  source_sha:
+    description: Validated source commit
+    value: ${{ steps.helper.outputs.source_sha }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run Harbor workflow helper
+      id: helper
+      shell: bash
+      env:
+        HELPER_COMMAND: ${{ inputs.command }}
+      run: python3 "$GITHUB_ACTION_PATH/main.py" "$HELPER_COMMAND"

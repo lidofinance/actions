@@ -3,93 +3,291 @@ name: Reusable build and push image to Harbor
 on:
   workflow_call:
     inputs:
+      target:
+        description: "Deployment target: dev, staging, prod, or critical"
+        required: true
+        type: string
       tag:
-        description: Image tag to push
-        required: true
+        description: Published stable GitHub Release tag for prod or critical
+        required: false
         type: string
-      registry:
-        description: Harbor registry host
-        required: true
-        type: string
-      registry_username:
-        description: Harbor username
+        default: ""
+      harbor_project:
+        description: Harbor project owned by the calling team
         required: true
         type: string
       image:
-        description: Image path in registry
+        description: Image name inside the Harbor project
         required: true
         type: string
-      environment:
-        description: GitHub Environment name
-        required: true
-        type: string
-      build_context:
-        description: Docker build context
-        required: false
-        type: string
-        default: .
       dockerfile:
-        description: Dockerfile path
+        description: Dockerfile path relative to the repository root
         required: false
         type: string
         default: Dockerfile
-
-    secrets:
-      registry_token:
-        required: true
+    outputs:
+      image_ref:
+        description: Published image reference with tag
+        value: ${{ jobs.publish.outputs.image_ref }}
+      image_digest:
+        description: Published image digest
+        value: ${{ jobs.publish.outputs.image_digest }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: harbor-push-${{ inputs.registry }}-${{ inputs.image }}-${{ inputs.tag }}
+  group: harbor-${{ github.repository_id }}-${{ inputs.target }}
   cancel-in-progress: false
 
 jobs:
-  build-and-push:
-    environment: ${{ inputs.environment }}
+  validate:
+    name: Validate source and inputs
     runs-on: ubuntu-22.04
+    outputs:
+      github_environment: ${{ steps.config.outputs.github_environment }}
+      image_tag: ${{ steps.config.outputs.image_tag }}
+      is_release: ${{ steps.config.outputs.is_release }}
+      remote_name: ${{ steps.config.outputs.remote_name }}
+      source_branch: ${{ steps.source.outputs.source_branch }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
 
     steps:
-      - name: Validate inputs
-        uses: lidofinance/actions/.github/actions/validate-inputs@f3d609836f57c62e8cfab2a09120310f1349b52c
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          inputs: ${{ toJSON(inputs) }}
+          python-version: "3.13.15"
 
-      - name: Checkout application repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Configure target and validate inputs
+        id: config
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@499eda960e675841d3ef0417f796f19a8f528443
         with:
+          command: configure
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          HARBOR_PROJECT: ${{ inputs.harbor_project }}
+          IMAGE: ${{ inputs.image }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ inputs.tag }}
+          TARGET: ${{ inputs.target }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
+          UPSTREAM_PATH: ${{ github.event.workflow_run.path }}
+          UPSTREAM_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+
+      - name: Checkout source to validate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ steps.config.outputs.source_ref }}
+          fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
 
-      - name: Setup buildx
-        id: buildx
-        uses: docker/setup-buildx-action@d70bba72b1f3fd22344832f00baa16ece964efeb # v3.3.0
-
-      - name: Login to Harbor
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - name: Validate source
+        id: source
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@499eda960e675841d3ef0417f796f19a8f528443
         with:
-          registry: ${{ inputs.registry }}
-          username: ${{ inputs.registry_username }}
-          password: ${{ secrets.registry_token }}
-
-      - name: Build and push docker image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+          command: validate-source
         env:
-          IMAGE_TAG: ${{ inputs.tag }}
-          IMAGE_REF: ${{ inputs.registry }}/${{ inputs.image }}:${{ inputs.tag }}
+          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
+          IS_RELEASE: ${{ steps.config.outputs.is_release }}
+          REQUESTED_SOURCE_BRANCH: ${{ steps.config.outputs.requested_source_branch }}
+          UPSTREAM_SHA: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Validate published GitHub Release
+        if: ${{ steps.config.outputs.is_release == 'true' }}
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@499eda960e675841d3ef0417f796f19a8f528443
         with:
-          context: ${{ inputs.build_context }}
-          file: ${{ inputs.dockerfile }}
-          push: true
+          command: validate-release
+        env:
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+          IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
+
+  publish:
+    name: Build and publish image
+    needs: validate
+    runs-on: ubuntu-22.04
+    environment: ${{ needs.validate.outputs.github_environment }}
+    outputs:
+      image_ref: ${{ steps.push.outputs.image_ref }}
+      image_digest: ${{ steps.push.outputs.image_digest }}
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13.15"
+
+      - name: Checkout validated commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Revalidate release source
+        if: ${{ needs.validate.outputs.is_release == 'true' }}
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@499eda960e675841d3ef0417f796f19a8f528443
+        with:
+          command: revalidate-release
+        env:
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          SOURCE_BRANCH: ${{ needs.validate.outputs.source_branch }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+
+      - name: Prepare isolated build context
+        id: context
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@499eda960e675841d3ef0417f796f19a8f528443
+        with:
+          command: prepare-context
+        env:
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          RUNNER_TEMP: ${{ runner.temp }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+
+      - name: Populate build-info.json
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@499eda960e675841d3ef0417f796f19a8f528443
+        with:
+          command: populate-build-info
+        env:
+          BUILD_CONTEXT: ${{ steps.context.outputs.context_dir }}
+          BUILD_VERSION: ${{ needs.validate.outputs.image_tag }}
+          BUILD_BRANCH: ${{ needs.validate.outputs.source_branch }}
+          BUILD_COMMIT: ${{ needs.validate.outputs.source_sha }}
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@d70bba72b1f3fd22344832f00baa16ece964efeb  # v3.3.0
+
+      - name: Build Docker image without registry credentials
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: ${{ steps.context.outputs.context_dir }}
+          file: ${{ steps.context.outputs.dockerfile }}
+          push: false
+          load: true
+          provenance: false
           builder: ${{ steps.buildx.outputs.name }}
-          tags: ${{ env.IMAGE_REF }}
+          tags: local-build:${{ github.run_id }}-${{ github.run_attempt }}
           build-args: |
-            BUILD_VERSION=${{ env.IMAGE_TAG }}
-            BUILD_BRANCH=${{ github.ref_name }}
-            BUILD_COMMIT=${{ github.sha }}
+            BUILD_VERSION=${{ needs.validate.outputs.image_tag }}
+            BUILD_BRANCH=${{ needs.validate.outputs.source_branch }}
+            BUILD_COMMIT=${{ needs.validate.outputs.source_sha }}
           labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ needs.validate.outputs.source_sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.version=${{ env.IMAGE_TAG }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            org.opencontainers.image.version=${{ needs.validate.outputs.image_tag }}
+          # cache-from: type=gha,scope=${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
+          # cache-to: type=gha,mode=max,scope=${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
+
+      - name: Scan Docker image with Trivy
+        shell: bash
+        env:
+          IMAGE_REF: local-build:${{ github.run_id }}-${{ github.run_attempt }}
+          TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:fc10faf341a1d8fa8256c5ff1a6662ef74dd38b65034c8ce42346cf958a02d5d  # v0.62.1
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "$RUNNER_TEMP:/reports" \
+            "$TRIVY_IMAGE" image \
+            --format json \
+            --output /reports/trivy-report.json \
+            --exit-code 0 \
+            --vuln-type os,library \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+            --scanners vuln \
+            "$IMAGE_REF"
+
+      - name: Upload Trivy vulnerability report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: trivy-${{ github.repository_id }}-${{ inputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/trivy-report.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summarize vulnerability report
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@499eda960e675841d3ef0417f796f19a8f528443
+        with:
+          command: summarize-trivy
+        env:
+          TRIVY_REPORT: ${{ runner.temp }}/trivy-report.json
+
+      - name: Login to development Harbor
+        if: ${{ inputs.target == 'dev' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: registry.dev.k8s-dev.org
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.HARBOR_DEV_TOKEN }}
+
+      - name: Login to staging Harbor
+        if: ${{ inputs.target == 'staging' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: registry.staging.k8s-staging.org
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.HARBOR_STAGE_TOKEN }}
+
+      - name: Login to production Harbor
+        if: ${{ inputs.target == 'prod' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: registry.prod.k8s-prod.org
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.HARBOR_PROD_TOKEN }}
+
+      - name: Login to critical Harbor
+        if: ${{ inputs.target == 'critical' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: registry.critical.k8s-prod.org
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.HARBOR_CRIT_TOKEN }}
+
+      - name: Prevent release rollback
+        if: ${{ needs.validate.outputs.is_release == 'true' }}
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@499eda960e675841d3ef0417f796f19a8f528443
+        with:
+          command: check-rollback
+        env:
+          HARBOR_TOKEN: ${{ inputs.target == 'prod' && secrets.HARBOR_PROD_TOKEN || secrets.HARBOR_CRIT_TOKEN }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
+          REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}
+          SOURCE_BRANCH: ${{ needs.validate.outputs.source_branch }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+
+      - name: Push Docker image
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          LOCAL_IMAGE: local-build:${{ github.run_id }}-${{ github.run_attempt }}
+          REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}
+        run: |
+          set -euo pipefail
+
+          remote_ref="${REMOTE_NAME}:${IMAGE_TAG}"
+          docker tag "$LOCAL_IMAGE" "$remote_ref"
+          docker push "$remote_ref"
+
+      - name: Resolve published image digest
+        id: push
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@499eda960e675841d3ef0417f796f19a8f528443
+        with:
+          command: resolve-image-digest
+        env:
+          REMOTE_REF: ${{ needs.validate.outputs.remote_name }}:${{ needs.validate.outputs.image_tag }}
