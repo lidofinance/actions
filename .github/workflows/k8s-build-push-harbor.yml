@@ -37,8 +37,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: harbor-${{ github.repository_id }}-${{ inputs.target }}
+  group: harbor-${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   validate:
@@ -258,13 +259,26 @@ jobs:
           username: ${{ vars.REGISTRY_USERNAME }}
           password: ${{ secrets.HARBOR_CRIT_TOKEN }}
 
-      - name: Prevent release rollback
-        if: ${{ needs.validate.outputs.is_release == 'true' }}
+      - name: Prevent production release rollback
+        if: ${{ needs.validate.outputs.is_release == 'true' && inputs.target == 'prod' }}
         uses: lidofinance/actions/.github/actions/k8s-harbor-helper@499eda960e675841d3ef0417f796f19a8f528443
         with:
           command: check-rollback
         env:
-          HARBOR_TOKEN: ${{ inputs.target == 'prod' && secrets.HARBOR_PROD_TOKEN || secrets.HARBOR_CRIT_TOKEN }}
+          HARBOR_TOKEN: ${{ secrets.HARBOR_PROD_TOKEN }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
+          REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}
+          SOURCE_BRANCH: ${{ needs.validate.outputs.source_branch }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+
+      - name: Prevent critical release rollback
+        if: ${{ needs.validate.outputs.is_release == 'true' && inputs.target == 'critical' }}
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@499eda960e675841d3ef0417f796f19a8f528443
+        with:
+          command: check-rollback
+        env:
+          HARBOR_TOKEN: ${{ secrets.HARBOR_CRIT_TOKEN }}
           IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
           REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
           REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}

@@ -40,8 +40,44 @@ class WorkflowContractTests(unittest.TestCase):
         references = re.findall(
             rf"uses: {re.escape(HELPER_REFERENCE)}@([0-9a-f]{{40}})", self.workflow
         )
-        self.assertEqual(len(references), 9)
+        self.assertEqual(len(references), 10)
         self.assertEqual(set(references), {HELPER_SHA})
+
+    def test_concurrency_is_scoped_to_image_and_queues_all_runs(self) -> None:
+        self.assertIn(
+            "group: harbor-${{ github.repository_id }}-${{ inputs.target }}-"
+            "${{ inputs.harbor_project }}-${{ inputs.image }}",
+            self.workflow,
+        )
+        self.assertIn("  cancel-in-progress: false\n  queue: max", self.workflow)
+
+    def test_rollback_uses_only_the_target_secret(self) -> None:
+        self.assertIn(
+            "if: ${{ needs.validate.outputs.is_release == 'true' && "
+            "inputs.target == 'prod' }}",
+            self.workflow,
+        )
+        self.assertIn(
+            "if: ${{ needs.validate.outputs.is_release == 'true' && "
+            "inputs.target == 'critical' }}",
+            self.workflow,
+        )
+        self.assertEqual(
+            self.workflow.count(
+                "HARBOR_TOKEN: ${{ secrets.HARBOR_PROD_TOKEN }}"
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.workflow.count(
+                "HARBOR_TOKEN: ${{ secrets.HARBOR_CRIT_TOKEN }}"
+            ),
+            1,
+        )
+        self.assertNotIn(
+            "secrets.HARBOR_PROD_TOKEN || secrets.HARBOR_CRIT_TOKEN",
+            self.workflow,
+        )
 
     def test_all_helper_commands_are_wired(self) -> None:
         commands = set(re.findall(r"          command: ([a-z-]+)", self.workflow))
