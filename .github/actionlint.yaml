@@ -1,0 +1,5 @@
+paths:
+  .github/workflows/k8s-build-push-harbor.yml:
+    ignore:
+      # actionlint v1.7.12 does not yet recognize GitHub's concurrency queue.
+      - 'unexpected key "queue" for "concurrency" section'
