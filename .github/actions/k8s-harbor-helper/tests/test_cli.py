@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from harbor_helper.cli import COMMANDS
+
 
 ACTION_ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ACTION_ROOT / "main.py"
@@ -74,6 +76,22 @@ class CliTests(unittest.TestCase):
         result = self.run_cli("unknown", self.environment())
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid choice", result.stderr)
+
+    def test_command_registry_is_complete(self) -> None:
+        self.assertEqual(
+            set(COMMANDS),
+            {
+                "check-rollback",
+                "configure",
+                "populate-build-info",
+                "prepare-context",
+                "resolve-image-digest",
+                "revalidate-release",
+                "summarize-trivy",
+                "validate-release",
+                "validate-source",
+            },
+        )
 
 
 if __name__ == "__main__":
