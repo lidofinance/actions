@@ -161,6 +161,75 @@ the already-built local image.
 The isolated context does not include Git submodule contents. Applications that
 need submodules in the Docker build require additional workflow support.
 
+#### DHI base-image policy
+
+Before building, the helper checks the selected Dockerfile from the isolated
+build context. External image references must use `dhi.io/`, including all
+`FROM` stages, external `COPY --from` sources, and `RUN --mount=from` sources.
+References to previous local stages are allowed. Global `ARG` defaults and the
+three workflow-supplied build arguments are resolved for `FROM` instructions.
+
+Non-DHI images or syntax that cannot be safely checked produce warnings for
+`dev` and block `staging`, `prod`, and `critical` before building or Harbor login.
+This conservative static check currently rejects heredocs, non-default escape
+characters, custom Dockerfile frontends, advanced variable substitutions, and
+variable image sources outside `FROM`. Use the standard Dockerfile frontend.
+This is not a provenance guarantee: it does not verify image signatures, detect
+arbitrary downloads in `RUN`, or certify registry mirrors as DHI images.
+
+Reviewed exceptions are downloaded from `lidofinance/vex-db`, branch `main`,
+file `policy/dhi-exceptions.json`. This source is fixed in the helper's
+`harbor_helper/dhi_policy.py`; the caller cannot select another repository or
+branch. The helper resolves `main` once per publish job to a commit SHA and
+downloads the file at that exact commit, not from a moving branch URL.
+
+If the repository or file does not exist, access is denied, the network fails,
+or the response/policy is malformed, the helper emits a warning and uses an
+empty exception list. Invalid documents are rejected in full, never partially
+applied. DHI images remain eligible; non-DHI images receive no exceptions and
+are still blocked outside `dev`. This fallback applies only to the DHI exception
+list, not to Trivy's VEX repositories or vulnerability database.
+
+Each exception must specify the exact caller repository, image reference (no
+wildcards), allowed targets, reason, and expiry date (inclusive). For example:
+
+```json
+{
+  "exceptions": [
+    {
+      "repository": "example/application",
+      "targets": ["staging", "prod"],
+      "image": "docker.io/example/legacy-base@sha256:<full-digest>",
+      "reason": "Temporary exception while migrating this application to DHI",
+      "expires": "2026-12-31"
+    }
+  ]
+}
+```
+
+Replace `<full-digest>` with the actual 64-character digest. Exceptions match
+the resolved reference exactly as written in the Dockerfile; prefer digest-pinned
+references. `scratch` also requires an explicit exception (or use a suitable DHI
+static base). Expired exceptions do not allow publication. Approved exceptions
+are logged, and policy counts appear in the job summary. The effective policy
+and a `source.json` record (repository, branch, resolved SHA, download/fallback
+status) are uploaded as an artifact for 30 days before DHI enforcement, including
+when validation subsequently blocks the build. The SHA and status also appear
+in the job summary. Each publish job gets its own uniquely named snapshot.
+
+Updating exceptions in the protected policy branch does not require a helper
+release or caller changes; new builds pick up the reviewed list. Configure
+branch protection and mandatory SecOps approval in Terraform. Renaming the
+policy repository or branch requires changing the central helper constants.
+The download uses optional `VEX_DB_READ_TOKEN`, falling back to the job's
+`GITHUB_TOKEN`. For a private policy repository, provision `VEX_DB_READ_TOKEN`
+as a read-only GitHub App/PAT token with Contents access to that repository and
+make the secret available to callers. Without that access, the empty-list
+fallback still applies. A missing or corrupt
+local snapshot after preparation is an infrastructure error and stops the job.
+Callers cannot supply an exception file or disable the check. Exceptions do not
+bypass Trivy's vulnerability gate.
+
 #### Vulnerability scanning
 
 The locally built image is scanned with Trivy before Harbor login and push. The
@@ -169,13 +238,36 @@ without an available fix. A JSON report containing all severity levels is stored
 as a workflow artifact for 30 days, and severity counts are written to the job
 summary.
 
-Vulnerability scanning is currently report-only for every target. Findings do
-not block publication to `dev`, `staging`, `prod`, or `critical`. Blocking can be
-enabled after CI and Harbor use a shared CVE allowlist.
+Trivy uses its standard vulnerability database and applies VEX statements from
+both Aqua VEX Hub and Docker Hardened Images advisories:
+
+- `https://github.com/aquasecurity/vexhub`;
+- `https://github.com/docker-hardened-images/advisories`.
+
+The repository configuration is stored in the pinned helper action at
+`.github/actions/k8s-harbor-helper/vex/repository.yaml`, independently of the
+application checkout, and is mounted read-only into Trivy. Both enabled VEX
+repositories are downloaded before scanning; a download failure stops the scan.
+The internal VEX entry points to `https://github.com/lidofinance/vex-db` but
+remains disabled until that repository has a valid Trivy VEX index. To enable
+it later, change `enabled` in this central configuration and update the helper
+SHA. DHI exception downloads from that repository are independent of this flag.
+
+Publication policy applies to findings remaining after Trivy's VEX filtering:
+
+| Target | HIGH or CRITICAL findings |
+| --- | --- |
+| `dev` | Warning; publication continues. |
+| `staging`, `prod`, `critical` | Publication is blocked before Harbor login. |
+
+Findings without an available fix also count toward this threshold. The JSON
+report is uploaded before the policy check, so it remains available when the
+check blocks publication. VEX-suppressed findings are retained separately in the
+JSON report through `--show-suppressed` and do not count toward the threshold.
 
 Failure to run Trivy or produce a valid report stops publication for every
-target. The CI scan uses raw Trivy findings and does not apply Harbor system or
-project CVE allowlists. The official Trivy container is pinned by digest at
+target, including `dev`. The CI scan does not apply Harbor system or project CVE
+allowlists. The official Trivy container is pinned by digest at
 version `v0.62.1` to match the scanner version used by Harbor.
 
 Harbor automatic scanning and pull prevention remain required. The pre-push CI

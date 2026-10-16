@@ -157,6 +157,35 @@ jobs:
           RUNNER_TEMP: ${{ runner.temp }}
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
 
+      - name: Download trusted DHI exceptions
+        id: dhi-policy
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        with:
+          command: prepare-dhi-policy
+        env:
+          GITHUB_TOKEN: ${{ secrets.VEX_DB_READ_TOKEN || github.token }}
+          RUNNER_TEMP: ${{ runner.temp }}
+
+      - name: Upload effective DHI exceptions and source
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ${{ steps.dhi-policy.outputs.dhi_policy_id }}
+          path: ${{ steps.dhi-policy.outputs.dhi_policy_dir }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Check DHI base images and approved exceptions
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        with:
+          command: check-dhi
+        env:
+          TARGET: ${{ inputs.target }}
+          DHI_POLICY: ${{ steps.dhi-policy.outputs.dhi_policy }}
+          DOCKERFILE: ${{ steps.context.outputs.dockerfile }}
+          BUILD_VERSION: ${{ needs.validate.outputs.image_tag }}
+          BUILD_BRANCH: ${{ needs.validate.outputs.source_branch }}
+          BUILD_COMMIT: ${{ needs.validate.outputs.source_sha }}
+
       - name: Populate build-info.json
         uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
         with:
@@ -192,18 +221,35 @@ jobs:
           # cache-from: type=gha,scope=${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
           # cache-to: type=gha,mode=max,scope=${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
 
+      - name: Prepare trusted Trivy VEX configuration
+        id: trivy-config
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        with:
+          command: prepare-trivy
+
       - name: Scan Docker image with Trivy
         shell: bash
         env:
           IMAGE_REF: local-build:${{ github.run_id }}-${{ github.run_attempt }}
           TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:fc10faf341a1d8fa8256c5ff1a6662ef74dd38b65034c8ce42346cf958a02d5d  # v0.62.1
+          VEX_CONFIG: ${{ steps.trivy-config.outputs.vex_config }}
         run: |
           set -euo pipefail
 
-          docker run --rm \
-            --volume /var/run/docker.sock:/var/run/docker.sock \
-            --volume "$RUNNER_TEMP:/reports" \
-            "$TRIVY_IMAGE" image \
+          trivy_args=(
+            --rm
+            --volume /var/run/docker.sock:/var/run/docker.sock
+            --volume "$RUNNER_TEMP:/reports"
+            --volume "$VEX_CONFIG:/root/.trivy/vex/repository.yaml:ro"
+            --env TRIVY_CACHE_DIR=/reports/trivy-cache
+          )
+
+          docker run "${trivy_args[@]}" "$TRIVY_IMAGE" vex repo download
+
+          docker run "${trivy_args[@]}" "$TRIVY_IMAGE" image \
+            --vex repo \
+            --skip-vex-repo-update \
+            --show-suppressed \
             --format json \
             --output /reports/trivy-report.json \
             --exit-code 0 \
@@ -220,11 +266,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Summarize vulnerability report
+      - name: Summarize vulnerability report and enforce publication policy
         uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
         with:
           command: summarize-trivy
         env:
+          TARGET: ${{ inputs.target }}
           TRIVY_REPORT: ${{ runner.temp }}/trivy-report.json
 
       - name: Login to development Harbor

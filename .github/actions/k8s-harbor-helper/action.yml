@@ -7,6 +7,18 @@ inputs:
     required: true
 
 outputs:
+  dhi_policy:
+    description: Validated DHI exceptions snapshot or empty fallback
+    value: ${{ steps.helper.outputs.dhi_policy }}
+  dhi_policy_dir:
+    description: Directory containing the effective policy and source metadata
+    value: ${{ steps.helper.outputs.dhi_policy_dir }}
+  dhi_policy_id:
+    description: Unique snapshot identifier for the policy artifact
+    value: ${{ steps.helper.outputs.dhi_policy_id }}
+  dhi_policy_sha:
+    description: Resolved policy commit, if the branch lookup succeeded
+    value: ${{ steps.helper.outputs.dhi_policy_sha }}
   context_dir:
     description: Isolated Docker build context
     value: ${{ steps.helper.outputs.context_dir }}
@@ -43,6 +55,9 @@ outputs:
   source_sha:
     description: Validated source commit
     value: ${{ steps.helper.outputs.source_sha }}
+  vex_config:
+    description: Trusted VEX repository configuration from the pinned helper
+    value: ${{ steps.helper.outputs.vex_config }}
 
 runs:
   using: composite
