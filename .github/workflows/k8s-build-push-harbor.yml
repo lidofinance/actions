@@ -61,7 +61,7 @@ jobs:
 
       - name: Configure target and validate inputs
         id: config
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: configure
         env:
@@ -91,7 +91,7 @@ jobs:
 
       - name: Validate source
         id: source
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: validate-source
         env:
@@ -102,7 +102,7 @@ jobs:
 
       - name: Validate published GitHub Release
         if: ${{ steps.config.outputs.is_release == 'true' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: validate-release
         env:
@@ -136,7 +136,7 @@ jobs:
 
       - name: Revalidate release source
         if: ${{ needs.validate.outputs.is_release == 'true' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: revalidate-release
         env:
@@ -149,7 +149,7 @@ jobs:
 
       - name: Prepare isolated build context
         id: context
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: prepare-context
         env:
@@ -159,7 +159,7 @@ jobs:
 
       - name: Download trusted DHI exceptions
         id: dhi-policy
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: prepare-dhi-policy
         env:
@@ -175,7 +175,7 @@ jobs:
           retention-days: 30
 
       - name: Check DHI base images and approved exceptions
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: check-dhi
         env:
@@ -187,7 +187,7 @@ jobs:
           BUILD_COMMIT: ${{ needs.validate.outputs.source_sha }}
 
       - name: Populate build-info.json
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: populate-build-info
         env:
@@ -223,7 +223,7 @@ jobs:
 
       - name: Prepare trusted Trivy VEX configuration
         id: trivy-config
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: prepare-trivy
 
@@ -267,7 +267,7 @@ jobs:
           retention-days: 30
 
       - name: Summarize vulnerability report and enforce publication policy
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: summarize-trivy
         env:
@@ -308,7 +308,7 @@ jobs:
 
       - name: Prevent production release rollback
         if: ${{ needs.validate.outputs.is_release == 'true' && inputs.target == 'prod' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: check-rollback
         env:
@@ -321,7 +321,7 @@ jobs:
 
       - name: Prevent critical release rollback
         if: ${{ needs.validate.outputs.is_release == 'true' && inputs.target == 'critical' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: check-rollback
         env:
@@ -347,7 +347,7 @@ jobs:
 
       - name: Resolve published image digest
         id: push
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@9a0b3cc8f86f2244998e18ef77bee422f6b470ee
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: resolve-image-digest
         env:
