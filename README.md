@@ -169,6 +169,93 @@ For production releases, use immutable version tags (for example `1.15.0` or `v1
 
 Prefer pinning reusable workflow versions to a release tag (for example `@v1`) once the workflow API is stable.
 
+### `k8s-copy-push-harbor.yml`
+
+This reusable workflow copies a Docker Hub image **by digest** into Harbor.
+
+It is intended to be called from application repositories via `jobs.<job_id>.uses`.
+
+Use it for third-party images that the application does not build. Clusters should pull from Harbor only, so Trivy can scan the image and Harbor can block Critical CVEs.
+
+The workflow performs:
+
+- Input validation (source path, digest, Harbor path, tag)
+- Checksum-pinned `crane` install
+- Harbor login
+- `crane copy` of the full multi-arch index
+- Digest check against the pinned source digest, using the digest `crane copy` prints (Harbor’s prevent-vuln policy and in-progress Trivy scans block `crane digest` / GET of the destination)
+
+`crane copy` is used instead of `docker pull` / `tag` / `push` so the Harbor image keeps every architecture and the same digest as Docker Hub. A GitHub-hosted runner `docker pull` would only fetch `linux/amd64` and could produce a new digest.
+
+This workflow does not use `validate-inputs`, because that action rejects `:`, which is required in `sha256:…` digests.
+
+#### Inputs
+
+| Name | Required | Description | Default |
+|------|----------|-------------|---------|
+| `source_image` | yes | Docker Hub path, for example `library/nginx` | - |
+| `source_digest` | yes | Image digest, `sha256:` followed by 64 hex characters | - |
+| `tag` | yes | Image tag to push to Harbor | - |
+| `registry` | yes | Harbor registry host | - |
+| `registry_username` | yes | Harbor username | - |
+| `image` | yes | Image path in Harbor, for example `<harbor-project>/<application-name>` | - |
+| `environment` | yes | GitHub Environment name used for approvals, vars and secrets | - |
+
+#### Secrets
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `registry_token` | yes | Harbor password or robot token |
+
+### Usage example
+
+```yaml
+name: Copy <your application name> from Docker Hub to production
+
+run-name: Copy ${{ inputs.SOURCE_IMAGE }}@${{ inputs.SOURCE_DIGEST }} to production as ${{ inputs.DEST_TAG }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      SOURCE_IMAGE:
+        description: Docker Hub image path, e.g. library/nginx
+        required: true
+        type: string
+      SOURCE_DIGEST:
+        description: Image digest, e.g. sha256:0123…
+        required: true
+        type: string
+      DEST_IMAGE:
+        description: Harbor image path, e.g. project/name
+        required: true
+        type: string
+      DEST_TAG:
+        description: Destination tag in Harbor, e.g. 1.27.1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  copy-and-push:
+    uses: lidofinance/actions/.github/workflows/k8s-copy-push-harbor.yml@<full-commit-sha>
+    with:
+      source_image: ${{ inputs.SOURCE_IMAGE }}
+      source_digest: ${{ inputs.SOURCE_DIGEST }}
+      tag: ${{ inputs.DEST_TAG }}
+      registry: registry.prod.k8s-prod.org
+      registry_username: ${{ vars.REGISTRY_USERNAME }}
+      image: ${{ inputs.DEST_IMAGE }}
+      environment: harbor_prod_release
+    secrets:
+      registry_token: ${{ secrets.HARBOR_PROD_TOKEN }}
+```
+
+Do not include `docker.io/` in `source_image`. Official Docker Hub images use the `library/` prefix.
+
+Pin the reusable workflow to a full commit SHA. Do not copy a floating upstream tag such as `latest`.
+
 ## Actions
 
 ### `validate-inputs`

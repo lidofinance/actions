@@ -1,0 +1,110 @@
+name: Reusable copy Docker Hub image to Harbor
+
+on:
+  workflow_call:
+    inputs:
+      source_image:
+        description: Docker Hub image path, for example library/nginx
+        required: true
+        type: string
+      source_digest:
+        description: Image digest, for example sha256:0123…
+        required: true
+        type: string
+      tag:
+        description: Image tag to push to Harbor
+        required: true
+        type: string
+      registry:
+        description: Harbor registry host
+        required: true
+        type: string
+      registry_username:
+        description: Harbor username
+        required: true
+        type: string
+      image:
+        description: Image path in registry
+        required: true
+        type: string
+      environment:
+        description: GitHub Environment name
+        required: true
+        type: string
+
+    secrets:
+      registry_token:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harbor-copy-${{ inputs.registry }}-${{ inputs.image }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  copy-and-push:
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-22.04
+    env:
+      SOURCE_IMAGE: ${{ inputs.source_image }}
+      SOURCE_DIGEST: ${{ inputs.source_digest }}
+      DEST_IMAGE: ${{ inputs.image }}
+      DEST_TAG: ${{ inputs.tag }}
+      REGISTRY: ${{ inputs.registry }}
+      CRANE_VERSION: v0.22.1
+      CRANE_TARBALL_SHA256: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
+
+    steps:
+      # validate-inputs rejects ":" so sha256:… digests cannot use that action
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          die() { echo "::error::$1" >&2; exit 1; }
+          image_re='^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$'
+          digest_re='^sha256:[a-fA-F0-9]{64}$'
+          tag_re='^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$'
+          registry_re='^[A-Za-z0-9.-]+$'
+          [[ "$SOURCE_IMAGE" =~ $image_re ]] || die "source_image must be a Docker Hub path such as library/nginx"
+          [[ "$SOURCE_DIGEST" =~ $digest_re ]] || die "source_digest must be sha256 followed by 64 hex characters"
+          [[ "$DEST_IMAGE" =~ $image_re ]] || die "image must be a Harbor path such as project/name"
+          [[ "$DEST_TAG" =~ $tag_re ]] || die "tag is not a valid Docker tag"
+          [[ "$REGISTRY" =~ $registry_re ]] || die "registry is invalid"
+
+      - name: Install crane
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/go-containerregistry.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          echo "${CRANE_TARBALL_SHA256}  ${tarball}" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$tarball" -C "$HOME/.local/bin" crane
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Login to Harbor
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ inputs.registry_username }}
+          password: ${{ secrets.registry_token }}
+
+      - name: Copy image to Harbor
+        run: |
+          set -euo pipefail
+          src="docker.io/${SOURCE_IMAGE}@${SOURCE_DIGEST}"
+          dest="${REGISTRY}/${DEST_IMAGE}:${DEST_TAG}"
+          echo "Copying ${src} -> ${dest}"
+          copy_log="$RUNNER_TEMP/crane-copy.log"
+          if ! crane copy "$src" "$dest" >"$copy_log" 2>&1; then
+            cat "$copy_log"
+            exit 1
+          fi
+          cat "$copy_log"
+          copied="$(sed -n 's/.*digest: \(sha256:[a-fA-F0-9]\{64\}\).*/\1/p' "$copy_log" | tail -1)"
+          if [ -z "$copied" ] || [ "$copied" != "$SOURCE_DIGEST" ]; then
+            echo "::error::Digest mismatch or the tag already exists in Harbor"
+            exit 1
+          fi
+          echo "Copied ${dest} with digest ${copied}"
