@@ -1,0 +1,11 @@
+repositories:
+  - name: default
+    url: https://github.com/aquasecurity/vexhub
+    enabled: true
+  - name: dhi-vex
+    url: https://github.com/docker-hardened-images/advisories
+    enabled: true
+  # Enable only after this repository contains a valid Trivy VEX index.
+  - name: internal
+    url: https://github.com/lidofinance/vex-db
+    enabled: false
