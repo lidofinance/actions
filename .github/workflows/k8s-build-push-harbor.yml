@@ -207,8 +207,8 @@ jobs:
           file: ${{ steps.context.outputs.dockerfile }}
           push: false
           load: true
-          sbom: true
-          provenance: mode=max
+         # sbom: true
+         # provenance: mode=max
           builder: ${{ steps.buildx.outputs.name }}
           tags: local-build:${{ github.run_id }}-${{ github.run_attempt }}
           build-args: |
