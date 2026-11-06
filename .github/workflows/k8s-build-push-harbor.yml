@@ -314,7 +314,7 @@ jobs:
         with:
           command: check-rollback
         env:
-          HARBOR_TOKEN: ${{ secrets.HARBOR_PROD_TOKEN }}
+          HARBOR_TOKEN: ${{ secrets.HARBOR_DEV_TOKEN }}
           IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
           REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
           REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}
