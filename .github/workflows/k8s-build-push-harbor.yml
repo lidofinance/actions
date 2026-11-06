@@ -277,7 +277,7 @@ jobs:
           TRIVY_REPORT: ${{ runner.temp }}/trivy-report.json
 
       - name: Login to development Harbor
-        if: ${{ inputs.target == 'dev' }}
+        if: ${{ inputs.target == 'dev' || inputs.target == 'prod'}}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           registry: registry.dev.k8s-dev.org
@@ -292,13 +292,13 @@ jobs:
           username: ${{ vars.REGISTRY_USERNAME }}
           password: ${{ secrets.HARBOR_STAGE_TOKEN }}
 
-      - name: Login to production Harbor
-        if: ${{ inputs.target == 'prod' }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
-        with:
-          registry: registry.dev.k8s-dev.org
-          username: ${{ vars.REGISTRY_USERNAME }}
-          password: ${{ secrets.HARBOR_DEV_TOKEN }}
+      # - name: Login to production Harbor
+      #   if: ${{ inputs.target == 'prod' }}
+      #   uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+      #   with:
+      #     registry: registry.dev.k8s-dev.org
+      #     username: ${{ vars.REGISTRY_USERNAME }}
+      #     password: ${{ secrets.HARBOR_DEV_TOKEN }}
 
       - name: Login to critical Harbor
         if: ${{ inputs.target == 'critical' }}
