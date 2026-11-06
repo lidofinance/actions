@@ -28,8 +28,8 @@ TARGETS = {
         "is_release": False,
     },
     "prod": {
-        "registry": "registry.prod.k8s-prod.org",
-        "github_environment": "harbor_prod_release",
+        "registry": "registry.dev.k8s-dev.org",
+        "github_environment": "harbor_dev_release",
         "is_release": True,
     },
     "critical": {
