@@ -113,14 +113,14 @@ class WorkflowContractTests(unittest.TestCase):
             self.workflow.index("--vex repo"),
         )
 
-    def test_publication_gate_runs_after_report_upload_and_before_registry_login(self) -> None:
+    def test_vulnerability_report_runs_after_upload_and_before_harbor_login(self) -> None:
         self.assertLess(
             self.workflow.index("name: Upload Trivy vulnerability report"),
             self.workflow.index("command: summarize-trivy"),
         )
         self.assertLess(
             self.workflow.index("command: summarize-trivy"),
-            self.workflow.index("name: Login to"),
+            self.workflow.index("name: Login to development Harbor"),
         )
         gate = re.search(
             r"(?ms)^      - name: Summarize vulnerability report.*?(?=^      - name:)",
@@ -128,7 +128,9 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(gate)
         self.assertIn("TARGET: ${{ inputs.target }}", gate.group())
-        self.assertNotIn("continue-on-error", gate.group())
+        self.assertIn("continue-on-error: true", gate.group())
+        self.assertIn('TRIVY_REPORT_ONLY: "true"', gate.group())
+        self.assertIn("TRIVY_SCAN_OUTCOME: ${{ steps.trivy-scan.outcome }}", gate.group())
         self.assertNotIn("if:", gate.group())
 
     def test_python_runtime_is_pinned(self) -> None:
@@ -160,7 +162,7 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             self.assertIn(f"{argument}: ${{{{ needs.validate.outputs.{output} }}}}", check.group())
             self.assertIn(f"{argument}=${{{{ needs.validate.outputs.{output} }}}}", self.workflow)
-        self.assertNotIn("continue-on-error", check.group())
+        self.assertIn("continue-on-error: true", check.group())
         self.assertNotIn("if:", check.group())
 
     def test_policy_snapshot_is_archived_before_validation_even_when_check_blocks(self) -> None:
@@ -190,6 +192,69 @@ class WorkflowContractTests(unittest.TestCase):
     def test_complex_runner_tools_are_not_used_by_workflow_shell(self) -> None:
         for command in ("curl", "gh api", "jq", "realpath"):
             self.assertNotIn(command, self.workflow)
+
+    def test_only_advisory_security_steps_can_continue_on_error(self) -> None:
+        advisory = {
+            "Download trusted DHI exceptions",
+            "Upload effective DHI exceptions and source",
+            "Check DHI base images and approved exceptions",
+            "Login to DHI registry",
+            "Prepare trusted Trivy VEX configuration",
+            "Scan Docker image with Trivy",
+            "Upload Trivy vulnerability report",
+            "Summarize vulnerability report (report-only)",
+        }
+        actual = set()
+        for block in re.split(r"(?m)^      - name: ", self.workflow)[1:]:
+            if "continue-on-error:" in block:
+                self.assertIn("continue-on-error: true", block)
+                actual.add(block.splitlines()[0])
+        self.assertEqual(actual, advisory)
+        self.assertNotIn("\n    continue-on-error:", self.workflow)
+
+    def test_dhi_login_is_separate_from_harbor_credentials(self) -> None:
+        login = re.search(
+            r"(?ms)^      - name: Login to DHI registry.*?(?=^      - name:)",
+            self.workflow,
+        )
+        self.assertIsNotNone(login)
+        self.assertIn("registry: dhi.io", login.group())
+        self.assertIn("username: ${{ secrets.DHI_USERNAME }}", login.group())
+        self.assertIn("password: ${{ secrets.DHI_TOKEN }}", login.group())
+        self.assertNotIn("HARBOR_", login.group())
+        self.assertLess(
+            self.workflow.index("name: Login to DHI registry"),
+            self.workflow.index("name: Build Docker image"),
+        )
+        self.assertEqual(self.workflow.count("secrets.DHI_TOKEN"), 1)
+        self.assertEqual(self.workflow.count("secrets.DHI_USERNAME"), 1)
+
+    def test_trivy_version_is_digest_pinned(self) -> None:
+        self.assertIn(
+            "TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:"
+            "94711c60051c6cab848a292e3a67f62623fcee361b2bb661f43b17184f4afdac  # v0.67.0",
+            self.workflow,
+        )
+        self.assertIn("--pkg-types os,library", self.workflow)
+        self.assertNotIn("--vuln-type", self.workflow)
+
+    def test_missing_reports_do_not_block_the_advisory_pipeline(self) -> None:
+        for name in (
+            "Upload Trivy vulnerability report",
+            "Upload effective DHI exceptions and source",
+        ):
+            block = re.search(
+                rf"(?ms)^      - name: {re.escape(name)}.*?(?=^      - name:)",
+                self.workflow,
+            )
+            self.assertIsNotNone(block)
+            self.assertIn("continue-on-error: true", block.group())
+            self.assertIn("if-no-files-found: warn", block.group())
+        scan = re.search(
+            r"(?ms)^      - name: Scan Docker image with Trivy.*?(?=^      - name:)",
+            self.workflow,
+        )
+        self.assertIn("if: ${{ steps.trivy-config.outcome == 'success' }}", scan.group())
 
     def test_expressions_are_not_interpolated_inside_shell(self) -> None:
         blocks = run_blocks(self.workflow)

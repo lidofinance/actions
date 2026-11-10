@@ -158,19 +158,36 @@ Dockerfile cannot copy the runner's Harbor Docker configuration into an image.
 After a successful build, the workflow logs in to the target registry and pushes
 the already-built local image.
 
+Before building, it attempts a separate login to the fixed `dhi.io` registry
+using secrets `DHI_USERNAME` and `DHI_TOKEN`. Use a read-only DHI access token,
+available to the publish job through repository/organization secrets or its
+selected Environment. Repository and Environment secrets are managed through
+Terraform code by the SecOps team; request credential changes through that
+process rather than configuring secrets manually. Neither value is passed as a
+Docker build argument or copied into the build context. BuildKit uses DHI
+authentication to pull bases; Harbor credentials remain unavailable to the build.
+
+DHI login is best-effort during rollout, so missing or invalid DHI credentials
+do not prevent non-DHI builds. A DHI base that requires authentication can still
+fail the actual Docker build when credentials are absent or invalid.
+
 The isolated context does not include Git submodule contents. Applications that
 need submodules in the Docker build require additional workflow support.
 
 #### DHI base-image policy
 
 Before building, the helper checks the selected Dockerfile from the isolated
-build context. External image references must use `dhi.io/`, including all
+build context. It checks for `dhi.io/` references, including all
 `FROM` stages, external `COPY --from` sources, and `RUN --mount=from` sources.
 References to previous local stages are allowed. Global `ARG` defaults and the
 three workflow-supplied build arguments are resolved for `FROM` instructions.
 
-Non-DHI images or syntax that cannot be safely checked produce warnings for
-`dev` and block `staging`, `prod`, and `critical` before building or Harbor login.
+Mandatory DHI enforcement is temporarily paused for every target. The check
+runs before building with `continue-on-error: true`: non-DHI references and
+unsupported syntax remain visible, but do not block publication. Policy
+preparation and artifact upload are also best-effort during this period.
+Allowing images without a DHI base is a temporary rollout exception, not a
+permanent relaxation of the base-image policy.
 This conservative static check currently rejects heredocs, non-default escape
 characters, custom Dockerfile frontends, advanced variable substitutions, and
 variable image sources outside `FROM`. Use the standard Dockerfile frontend.
@@ -186,9 +203,9 @@ downloads the file at that exact commit, not from a moving branch URL.
 If the repository or file does not exist, access is denied, the network fails,
 or the response/policy is malformed, the helper emits a warning and uses an
 empty exception list. Invalid documents are rejected in full, never partially
-applied. DHI images remain eligible; non-DHI images receive no exceptions and
-are still blocked outside `dev`. This fallback applies only to the DHI exception
-list, not to Trivy's VEX repositories or vulnerability database.
+applied. Non-DHI images receive no exceptions, but advisory validation does not
+block publication during the rollout. This fallback applies only to the DHI
+exception list, not to Trivy's VEX repositories or vulnerability database.
 
 Each exception must specify the exact caller repository, image reference (no
 wildcards), allowed targets, reason, and expiry date (inclusive). For example:
@@ -210,12 +227,12 @@ wildcards), allowed targets, reason, and expiry date (inclusive). For example:
 Replace `<full-digest>` with the actual 64-character digest. Exceptions match
 the resolved reference exactly as written in the Dockerfile; prefer digest-pinned
 references. `scratch` also requires an explicit exception (or use a suitable DHI
-static base). Expired exceptions do not allow publication. Approved exceptions
+static base). Expired exceptions are not accepted by the check. Approved exceptions
 are logged, and policy counts appear in the job summary. The effective policy
 and a `source.json` record (repository, branch, resolved SHA, download/fallback
-status) are uploaded as an artifact for 30 days before DHI enforcement, including
-when validation subsequently blocks the build. The SHA and status also appear
-in the job summary. Each publish job gets its own uniquely named snapshot.
+status) are uploaded as an artifact for 30 days before DHI validation. The SHA
+and status also appear in the job summary. Each publish job gets its own uniquely
+named snapshot.
 
 Updating exceptions in the protected policy branch does not require a helper
 release or caller changes; new builds pick up the reviewed list. Configure
@@ -225,10 +242,9 @@ The download uses optional `VEX_DB_READ_TOKEN`, falling back to the job's
 `GITHUB_TOKEN`. For a private policy repository, provision `VEX_DB_READ_TOKEN`
 as a read-only GitHub App/PAT token with Contents access to that repository and
 make the secret available to callers. Without that access, the empty-list
-fallback still applies. A missing or corrupt
-local snapshot after preparation is an infrastructure error and stops the job.
-Callers cannot supply an exception file or disable the check. Exceptions do not
-bypass Trivy's vulnerability gate.
+fallback still applies. A missing or corrupt local snapshot is reported as a
+validation error, but the advisory step does not stop publication. Callers
+cannot supply an exception file. DHI exceptions do not suppress Trivy findings.
 
 #### Vulnerability scanning
 
@@ -247,37 +263,53 @@ both Aqua VEX Hub and Docker Hardened Images advisories:
 The repository configuration is stored in the pinned helper action at
 `.github/actions/k8s-harbor-helper/vex/repository.yaml`, independently of the
 application checkout, and is mounted read-only into Trivy. Both enabled VEX
-repositories are downloaded before scanning; a download failure stops the scan.
+repositories are downloaded before scanning; a download failure makes the scan
+unavailable, not clean.
 The internal VEX entry points to `https://github.com/lidofinance/vex-db` but
 remains disabled until that repository has a valid Trivy VEX index. To enable
 it later, change `enabled` in this central configuration and update the helper
 SHA. DHI exception downloads from that repository are independent of this flag.
 
-Publication policy applies to findings remaining after Trivy's VEX filtering:
+Trivy is temporarily report-only for every target. Findings remaining after VEX
+filtering are reported as follows:
 
 | Target | HIGH or CRITICAL findings |
 | --- | --- |
-| `dev` | Warning; publication continues. |
-| `staging`, `prod`, `critical` | Publication is blocked before Harbor login. |
+| `dev`, `staging`, `prod`, `critical` | Warning; publication continues. |
 
-Findings without an available fix also count toward this threshold. The JSON
-report is uploaded before the policy check, so it remains available when the
-check blocks publication. VEX-suppressed findings are retained separately in the
-JSON report through `--show-suppressed` and do not count toward the threshold.
+Allowing HIGH/CRITICAL findings through CI is a temporary rollout exception,
+not the intended permanent publication policy.
 
-Failure to run Trivy or produce a valid report stops publication for every
-target, including `dev`. The CI scan does not apply Harbor system or project CVE
-allowlists. The official Trivy container is pinned by digest at
-version `v0.62.1` to match the scanner version used by Harbor.
+Findings without an available fix are also reported. The JSON report is uploaded
+before summarizing. VEX-suppressed findings are retained separately through
+`--show-suppressed` and excluded from the active severity counts.
 
-Harbor automatic scanning and pull prevention remain required. The pre-push CI
-scan provides earlier feedback, while Harbor continues to enforce its configured
-vulnerability policy for published images.
+Preparation, scanning, report upload, and summary steps use
+`continue-on-error: true`. A failed/skipped scan or invalid/missing report is
+shown as **unavailable** in the summary, without inventing zero findings;
+publication continues. There is no empty-VEX fallback presented as a valid scan.
+The workflow sets `TRIVY_REPORT_ONLY=true`; the helper's strict mode remains
+available for future enforcement. The CI scan does not apply Harbor CVE
+allowlists. The official Trivy `v0.67.0` container is pinned by digest; the Harbor
+scanner is not upgraded by this change.
+
+Harbor policy is unchanged: CRITICAL vulnerabilities block image pulls in
+staging, production, and critical; dev scans images without this pull block.
+This is a pull-time control, not a CI push gate: a successful CI push does not
+mean a vulnerable image can be deployed. HIGH findings do not imply the same
+Harbor block under this CRITICAL-only policy.
+
+Source validation, build failures, Harbor login, anti-rollback, and push remain
+fatal.
 
 #### Required repository and Harbor configuration
 
-- Create the GitHub Environments and variables/secrets listed in the target
-  mapping table.
+- Have SecOps provision the GitHub Environments and variables/secrets listed in
+  the target mapping table through Terraform. This includes all Harbor registry
+  secrets (`HARBOR_DEV_TOKEN`, `HARBOR_STAGE_TOKEN`, `HARBOR_PROD_TOKEN`, and
+  `HARBOR_CRIT_TOKEN`) and the `REGISTRY_USERNAME` Environment variable.
+  Repository and Environment secrets, including DHI credentials, follow the
+  same managed process; do not provision registry credentials manually.
 - Configure each Environment's deployment branch rules. Required reviewers are
   optional; the workflow itself does not require a manual approval.
 - Allow only the repository's protected default branch to deploy through
@@ -406,7 +438,7 @@ jobs:
     needs: release-tag
     permissions:
       contents: read
-    uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@<full-commit-sha>
+    uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@main
     with:
       target: prod
       tag: ${{ needs.release-tag.outputs.tag }}
@@ -442,7 +474,7 @@ permissions:
 
 jobs:
   build:
-    uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@<full-commit-sha>
+    uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@main
     with:
       target: dev
       harbor_project: <harbor-project>
@@ -475,7 +507,7 @@ permissions:
 
 jobs:
   build:
-    uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@<full-commit-sha>
+    uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@main
     with:
       target: staging
       harbor_project: <harbor-project>
@@ -492,13 +524,19 @@ and critical use the supplied immutable release tag.
 The current build loads a single-platform image into the local Docker daemon
 before publishing. Multi-platform builds require a different publish design.
 
-Pin reusable workflows to a reviewed full commit SHA. Do not use a mutable branch
-or tag for production and critical release workflows.
+The Harbor caller templates temporarily use this reusable workflow at `@main`
+during rollout. This is not the permanent pinning policy: after stabilization,
+replace it with a reviewed full commit SHA retained in the target branch.
+Deploy those callers only after the updated workflow is merged into
+`actions/main`. Changes to that protected branch must be reviewed; during this
+period callers trust its changing contents. Internal helper actions and
+third-party actions remain pinned to full commit SHAs.
 
 `secrets: inherit` grants the called workflow access to secrets available to the
-caller. Use it only with the trusted reusable workflow pinned to a reviewed full
-commit SHA. The workflow references only the fixed Harbor token name selected for
-the requested target and never passes that token to the Docker build.
+caller. Use it only with the trusted reusable workflow from protected
+`lidofinance/actions/main`. The workflow references only the fixed Harbor token
+name selected for the requested target and never passes that token to the
+Docker build.
 
 ## Actions
 
@@ -574,4 +612,6 @@ validation that rejects comma whenever a value must represent exactly one tag,
 image, path, or destination. The Harbor reusable workflow implements its own
 field-specific validation and does not use this generic action.
 
-For security and reproducibility, pin reusable workflows and actions to a full commit SHA instead of a mutable branch or tag.
+For other workflows and actions, prefer full commit SHAs for reproducibility.
+The documented exception is the centrally managed Harbor reusable workflow at
+`lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@main`.

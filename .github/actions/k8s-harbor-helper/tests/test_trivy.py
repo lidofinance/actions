@@ -51,6 +51,56 @@ class TrivyTests(TemporaryTestCase):
             "::warning::" in str(call) for call in print_mock.call_args_list
         ))
 
+    def test_report_only_allows_high_and_critical_for_every_target(self) -> None:
+        self.write_report("HIGH", "CRITICAL")
+        for target in ("dev", "staging", "prod", "critical"):
+            self.summary.unlink(missing_ok=True)
+            with self.subTest(target=target), mock.patch("builtins.print") as output:
+                summarize_trivy(self.environment(target) | {"TRIVY_REPORT_ONLY": "true"})
+                self.assertTrue(any("::warning::" in str(call) for call in output.call_args_list))
+                self.assertIn("| HIGH | 1 |", self.summary.read_text())
+                self.assertIn("| CRITICAL | 1 |", self.summary.read_text())
+                self.assertIn("policy: report-only", self.summary.read_text())
+                self.assertNotIn("blocking HIGH/CRITICAL", self.summary.read_text())
+
+    def test_report_only_marks_missing_and_invalid_reports_as_unavailable(self) -> None:
+        for content in (None, "invalid JSON", "{}", '{"Results": null}', '{"Results": [null]}'):
+            self.report.unlink(missing_ok=True)
+            self.summary.unlink(missing_ok=True)
+            if content is not None:
+                self.report.write_text(content)
+            with self.subTest(content=content), mock.patch("builtins.print") as output:
+                summarize_trivy(self.environment("prod") | {"TRIVY_REPORT_ONLY": "true"})
+                self.assertIn("Status: **unavailable**", self.summary.read_text())
+                self.assertNotIn("| HIGH |", self.summary.read_text())
+                self.assertTrue(any("::warning::" in str(call) for call in output.call_args_list))
+                self.assertFalse(any("No HIGH" in str(call) for call in output.call_args_list))
+
+    def test_failed_scan_does_not_trust_a_partial_or_stale_clean_report(self) -> None:
+        self.write_report()
+        for outcome in ("failure", "skipped", "cancelled", ""):
+            self.summary.unlink(missing_ok=True)
+            with self.subTest(outcome=outcome), mock.patch("builtins.print"):
+                summarize_trivy(self.environment("prod") | {
+                    "TRIVY_REPORT_ONLY": "true", "TRIVY_SCAN_OUTCOME": outcome,
+                })
+                self.assertIn("Status: **unavailable**", self.summary.read_text())
+                self.assertNotIn("| HIGH |", self.summary.read_text())
+
+    def test_report_only_clean_scan_still_produces_a_summary(self) -> None:
+        self.write_report("LOW")
+        summarize_trivy(self.environment("prod") | {
+            "TRIVY_REPORT_ONLY": "true", "TRIVY_SCAN_OUTCOME": "success",
+        })
+        self.assertIn("| LOW | 1 |", self.summary.read_text())
+        self.assertIn("policy: report-only", self.summary.read_text())
+
+    def test_report_only_flag_requires_an_explicit_boolean(self) -> None:
+        self.assert_workflow_error(
+            "TRIVY_REPORT_ONLY must be", summarize_trivy,
+            self.environment("prod") | {"TRIVY_REPORT_ONLY": "invalid"},
+        )
+
     def test_high_and_critical_block_all_non_dev_targets_without_a_fix(self) -> None:
         for target in ("staging", "prod", "critical"):
             for severity in ("HIGH", "CRITICAL"):

@@ -159,6 +159,7 @@ jobs:
 
       - name: Download trusted DHI exceptions
         id: dhi-policy
+        continue-on-error: true
         uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: prepare-dhi-policy
@@ -167,14 +168,16 @@ jobs:
           RUNNER_TEMP: ${{ runner.temp }}
 
       - name: Upload effective DHI exceptions and source
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: ${{ steps.dhi-policy.outputs.dhi_policy_id }}
           path: ${{ steps.dhi-policy.outputs.dhi_policy_dir }}
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Check DHI base images and approved exceptions
+        continue-on-error: true
         uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: check-dhi
@@ -200,7 +203,15 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@d70bba72b1f3fd22344832f00baa16ece964efeb  # v3.3.0
 
-      - name: Build Docker image without registry credentials
+      - name: Login to DHI registry
+        continue-on-error: true
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: dhi.io
+          username: ${{ secrets.DHI_USERNAME }}
+          password: ${{ secrets.DHI_TOKEN }}
+
+      - name: Build Docker image without Harbor credentials
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: ${{ steps.context.outputs.context_dir }}
@@ -223,15 +234,19 @@ jobs:
 
       - name: Prepare trusted Trivy VEX configuration
         id: trivy-config
+        continue-on-error: true
         uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: prepare-trivy
 
       - name: Scan Docker image with Trivy
+        id: trivy-scan
+        if: ${{ steps.trivy-config.outcome == 'success' }}
+        continue-on-error: true
         shell: bash
         env:
           IMAGE_REF: local-build:${{ github.run_id }}-${{ github.run_attempt }}
-          TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:fc10faf341a1d8fa8256c5ff1a6662ef74dd38b65034c8ce42346cf958a02d5d  # v0.62.1
+          TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:94711c60051c6cab848a292e3a67f62623fcee361b2bb661f43b17184f4afdac  # v0.67.0
           VEX_CONFIG: ${{ steps.trivy-config.outputs.vex_config }}
         run: |
           set -euo pipefail
@@ -253,25 +268,29 @@ jobs:
             --format json \
             --output /reports/trivy-report.json \
             --exit-code 0 \
-            --vuln-type os,library \
+            --pkg-types os,library \
             --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
             --scanners vuln \
             "$IMAGE_REF"
 
       - name: Upload Trivy vulnerability report
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: trivy-${{ github.repository_id }}-${{ inputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/trivy-report.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
-      - name: Summarize vulnerability report and enforce publication policy
+      - name: Summarize vulnerability report (report-only)
+        continue-on-error: true
         uses: lidofinance/actions/.github/actions/k8s-harbor-helper@915ef842b86f9d0ea6560e402a36a39be6d415ef
         with:
           command: summarize-trivy
         env:
           TARGET: ${{ inputs.target }}
+          TRIVY_REPORT_ONLY: "true"
+          TRIVY_SCAN_OUTCOME: ${{ steps.trivy-scan.outcome }}
           TRIVY_REPORT: ${{ runner.temp }}/trivy-report.json
 
       - name: Login to development Harbor

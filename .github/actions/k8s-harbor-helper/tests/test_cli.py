@@ -137,6 +137,29 @@ class CliTests(unittest.TestCase):
         self.assertIn("publication to prod is blocked", result.stdout)
         self.assertIn("| HIGH | 1 |", summary.read_text())
 
+    def test_report_only_cli_allows_findings_and_scan_failure(self) -> None:
+        report = self.root / "trivy.json"
+        summary = self.root / "summary.md"
+        report.write_text(json.dumps({
+            "Results": [{"Vulnerabilities": [{"Severity": "CRITICAL"}]}],
+        }))
+        for outcome in ("success", "failure", "skipped"):
+            summary.unlink(missing_ok=True)
+            with self.subTest(outcome=outcome):
+                result = self.run_cli(
+                    "summarize-trivy",
+                    self.environment(
+                        TRIVY_REPORT=str(report), GITHUB_STEP_SUMMARY=str(summary),
+                        TRIVY_REPORT_ONLY="true", TRIVY_SCAN_OUTCOME=outcome,
+                    ),
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("::warning::", result.stdout)
+                if outcome == "success":
+                    self.assertIn("| CRITICAL | 1 |", summary.read_text())
+                else:
+                    self.assertIn("Status: **unavailable**", summary.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
