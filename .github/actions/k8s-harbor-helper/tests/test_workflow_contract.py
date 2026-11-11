@@ -51,7 +51,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("  cancel-in-progress: false\n  queue: max", self.workflow)
 
-    def test_rollback_uses_only_the_target_secret(self) -> None:
+    def test_sandbox_prod_uses_dev_credentials_without_weakening_rollback(self) -> None:
         self.assertIn(
             "if: ${{ needs.validate.outputs.is_release == 'true' && "
             "inputs.target == 'prod' }}",
@@ -64,7 +64,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(
             self.workflow.count(
-                "HARBOR_TOKEN: ${{ secrets.HARBOR_PROD_TOKEN }}"
+                "HARBOR_TOKEN: ${{ secrets.HARBOR_DEV_TOKEN }}"
             ),
             1,
         )
@@ -74,10 +74,17 @@ class WorkflowContractTests(unittest.TestCase):
             ),
             1,
         )
-        self.assertNotIn(
-            "secrets.HARBOR_PROD_TOKEN || secrets.HARBOR_CRIT_TOKEN",
-            self.workflow,
+        self.assertNotIn("secrets.HARBOR_PROD_TOKEN", self.workflow)
+        prod_login = re.search(
+            r"(?ms)^      - name: Login to development Harbor for production sandbox test"
+            r".*?(?=^      - name:)", self.workflow,
         )
+        self.assertIsNotNone(prod_login)
+        self.assertIn("if: ${{ inputs.target == 'prod' }}", prod_login.group())
+        self.assertIn("registry: registry.dev.k8s-dev.org", prod_login.group())
+        self.assertIn("password: ${{ secrets.HARBOR_DEV_TOKEN }}", prod_login.group())
+        self.assertNotIn("continue-on-error:", prod_login.group())
+        self.assertNotIn("HARBOR_DEV_TOKEN ||", self.workflow)
 
     def test_all_helper_commands_are_wired(self) -> None:
         commands = set(re.findall(r"          command: ([a-z-]+)", self.workflow))

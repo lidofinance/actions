@@ -1,5 +1,8 @@
 name: Reusable build and push image to Harbor
 
+# Sandbox branch only: target prod uses dev Harbor credentials and destination.
+# Keep release validation enabled; never merge this routing into the release branch.
+
 on:
   workflow_call:
     inputs:
@@ -309,13 +312,13 @@ jobs:
           username: ${{ vars.REGISTRY_USERNAME }}
           password: ${{ secrets.HARBOR_STAGE_TOKEN }}
 
-      - name: Login to production Harbor
+      - name: Login to development Harbor for production sandbox test
         if: ${{ inputs.target == 'prod' }}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
-          registry: registry.prod.k8s-prod.org
+          registry: registry.dev.k8s-dev.org
           username: ${{ vars.REGISTRY_USERNAME }}
-          password: ${{ secrets.HARBOR_PROD_TOKEN }}
+          password: ${{ secrets.HARBOR_DEV_TOKEN }}
 
       - name: Login to critical Harbor
         if: ${{ inputs.target == 'critical' }}
@@ -331,7 +334,7 @@ jobs:
         with:
           command: check-rollback
         env:
-          HARBOR_TOKEN: ${{ secrets.HARBOR_PROD_TOKEN }}
+          HARBOR_TOKEN: ${{ secrets.HARBOR_DEV_TOKEN }}
           IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
           REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
           REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}

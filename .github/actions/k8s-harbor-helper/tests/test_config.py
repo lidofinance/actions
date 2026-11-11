@@ -28,7 +28,28 @@ class ConfigureTests(TemporaryTestCase):
         outputs = configure(self.environment())
         self.assertEqual(outputs["source_ref"], "v1.2.3")
         self.assertEqual(outputs["is_release"], "true")
-        self.assertEqual(outputs["github_environment"], "harbor_prod_release")
+        self.assertEqual(outputs["github_environment"], "harbor_dev_release")
+        self.assertEqual(
+            outputs["remote_name"],
+            "registry.dev.k8s-dev.org/team-example/application/api",
+        )
+        self.assertEqual(outputs["image_tag"], "v1.2.3")
+        self.assertEqual(outputs["requested_source_branch"], "")
+
+    def test_non_prod_destinations_are_unchanged(self) -> None:
+        for target, registry, github_environment in (
+            ("dev", "registry.dev.k8s-dev.org", "harbor_dev_release"),
+            ("staging", "registry.staging.k8s-staging.org", "harbor_stage_release"),
+            ("critical", "registry.critical.k8s-prod.org", "harbor_crit_release"),
+        ):
+            with self.subTest(target=target):
+                outputs = configure(self.environment(
+                    TARGET=target, TAG="v1.2.3" if target == "critical" else "",
+                ))
+                self.assertEqual(outputs["github_environment"], github_environment)
+                self.assertEqual(
+                    outputs["remote_name"], f"{registry}/team-example/application/api",
+                )
 
     def test_development_configuration(self) -> None:
         outputs = configure(self.environment(TARGET="dev", TAG=""))

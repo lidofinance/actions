@@ -2,6 +2,29 @@
 
 This repo contains common actions and workflows for the Lido applications
 
+> Sandbox-only branch: `test/sre-4380-python-prod-via-dev-rollout`, based on
+> `fix/sre-4380-k8s-build-push-harbor-reusable-wf-python` at `9484823`.
+> **Do not merge this branch into the release branch or main.** Only `target: prod`
+> is redirected to `registry.dev.k8s-dev.org`, Environment `harbor_dev_release`,
+> and `HARBOR_DEV_TOKEN`. The release tag, upstream/SHA/branch validation, and
+> anti-rollback remain enabled. Other targets are unchanged; `critical` still
+> requires its real critical Harbor credentials. This tests workflow behavior,
+> not production Harbor pull prevention or other production infrastructure policy.
+
+For this sandbox, keep `target: prod` in the release caller and change its
+reusable workflow reference to:
+
+```yaml
+uses: lidofinance/actions/.github/workflows/k8s-build-push-harbor.yml@test/sre-4380-python-prod-via-dev-rollout
+```
+
+Use a dedicated dev image repository (for example, `k8s-hello-python-rollout-test`)
+so existing sandbox tags do not affect anti-rollback results. SecOps must provide
+`REGISTRY_USERNAME` and `HARBOR_DEV_TOKEN` in `harbor_dev_release`, and DHI
+credentials if the base image requires them. Environment deployment rules must
+allow the caller repository's default branch. The mapping below reflects this
+sandbox override; the remaining release policy is unchanged from its base branch.
+
 ## Workflows
 
 - [`verify_commit_signatures.yml`](.github/actions/verify-commit-signatures/README.md)
@@ -67,7 +90,7 @@ normally follows the `team-<your_team_name>` naming convention.
 |--------|----------|--------------------|-----------|--------------------|
 | `dev` | `registry.dev.k8s-dev.org` | `harbor_dev_release` | `dev` | `HARBOR_DEV_TOKEN` |
 | `staging` | `registry.staging.k8s-staging.org` | `harbor_stage_release` | `staging` | `HARBOR_STAGE_TOKEN` |
-| `prod` | `registry.prod.k8s-prod.org` | `harbor_prod_release` | release tag | `HARBOR_PROD_TOKEN` |
+| `prod` (sandbox) | `registry.dev.k8s-dev.org` | `harbor_dev_release` | release tag | `HARBOR_DEV_TOKEN` |
 | `critical` | `registry.critical.k8s-prod.org` | `harbor_crit_release` | release tag | `HARBOR_CRIT_TOKEN` |
 
 Each Environment must also provide `REGISTRY_USERNAME` as a GitHub Environment
