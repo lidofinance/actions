@@ -4,7 +4,7 @@
 # not only the lines the PR changed), lists every Warn/Block finding in one PR
 # comment, and fails the job when the organization policy says Block.
 #
-# Three things here are not obvious:
+# Four things here are not obvious:
 #
 # 1. Empty baseline scan. Socket Python CLI 2.11.13 only gates and comments when it
 #    compares two scans, and its comment lists only findings that are new in that
@@ -14,7 +14,11 @@
 #    repositories, so a run never depends on a scan from an earlier run.
 # 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on `reopened`.
 #    Forcing one supported action keeps every PR event on the same scan path.
-# 3. merge_group fails on purpose. The CLI has no merge queue mode; a clear
+# 3. Reachability with a fallback. The scan first runs with --reach, which analyses
+#    the code and lowers findings that cannot be reached. If that analysis does not
+#    complete, the CLI exits 3 without a report, and the step scans again without
+#    --reach. A failed analysis therefore gives more findings, never fewer.
+# 4. merge_group fails on purpose. The CLI has no merge queue mode; a clear
 #    failure is safer than a green check that scanned nothing.
 #
 # Exit codes of the scan step: 0 = no Block (Warn is allowed), 1 = Block finding,
@@ -148,20 +152,37 @@ jobs:
           # --strict-blocking     fail on any Block, not only on new ones
           # --disable-ignore      "@SocketSecurity ignore" PR comments have no effect
           # --disable-overview    one security comment, no second overview comment
-          socketcli --scm github \
-            --owner "$GITHUB_REPOSITORY_OWNER" \
-            --repo "$SCAN_REPO" \
-            --branch "$SCAN_BRANCH" \
-            --commit-sha "$SCAN_COMMIT" \
-            --pr-number "$PR_NUMBER" \
-            --target-path . \
-            --base-scan-id "$BASELINE_SCAN_ID" \
-            --ignore-commit-files \
-            --strict-blocking \
-            --disable-ignore \
-            --disable-overview \
-            --json-file "$RUNNER_TEMP/socket/report.json" \
-            --summary-file "$RUNNER_TEMP/socket/summary.txt"
+          scan() {
+            socketcli --scm github \
+              --owner "$GITHUB_REPOSITORY_OWNER" \
+              --repo "$SCAN_REPO" \
+              --branch "$SCAN_BRANCH" \
+              --commit-sha "$SCAN_COMMIT" \
+              --pr-number "$PR_NUMBER" \
+              --target-path . \
+              --base-scan-id "$BASELINE_SCAN_ID" \
+              --ignore-commit-files \
+              --strict-blocking \
+              --disable-ignore \
+              --disable-overview \
+              --json-file "$RUNNER_TEMP/socket/report.json" \
+              --summary-file "$RUNNER_TEMP/socket/summary.txt" \
+              "$@"
+          }
+
+          status=0
+          scan --reach --reach-disable-analytics || status=$?
+
+          # Exit 3 without a report means the scan did not run, usually because the
+          # reachability analysis failed. Scan again without it.
+          if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ]; then
+            echo '::warning::Reachability analysis did not complete. Scanning again without it.'
+            touch "$RUNNER_TEMP/socket/reachability-fallback"
+            find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
+            status=0
+            scan || status=$?
+          fi
+          exit "$status"
 
       - name: Confirm that the scan really assessed this commit
         # A green scan step is not enough: the CLI exits 0 when it skips the
@@ -193,6 +214,9 @@ jobs:
         run: |
           {
             echo '## Socket dependency scan'
+            if [ -e "$RUNNER_TEMP/socket/reachability-fallback" ]; then
+              echo 'Reachability analysis did not complete. These findings are reported without it.'
+            fi
             if [ -s "$RUNNER_TEMP/socket/summary.txt" ]; then
               echo '```text'
               # GitHub rejects step summaries above 1 MiB.
