@@ -147,12 +147,17 @@ jobs:
           # Set explicitly so that no .env file can redirect the API key elsewhere.
           BASE_API_URL: https://api.socket.dev/v0
           BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+          # The reachability engine downloads packages with npm. It must never run
+          # their install scripts in this step, which holds both tokens.
+          NPM_CONFIG_IGNORE_SCRIPTS: 'true'
         run: |
           # --base-scan-id        compare with the empty baseline: every finding is new
           # --ignore-commit-files scan even when the PR touches no manifest file
           # --strict-blocking     fail on any Block, not only on new ones
           # --disable-ignore      "@SocketSecurity ignore" PR comments have no effect
           # --disable-overview    one security comment, no second overview comment
+          # --reach               analyse the code and lower findings that are not reachable
+          # --reach-disable-analytics  do not send analysis statistics to Socket
           scan() {
             socketcli --scm github \
               --owner "$GITHUB_REPOSITORY_OWNER" \
@@ -201,6 +206,8 @@ jobs:
             exit 3
           }
 
+          [ -n "$BASELINE_SCAN_ID" ] ||
+            not_scanned 'no empty baseline scan was created'
           [ -s "$report" ] ||
             not_scanned 'the CLI wrote no report'
           # .scan_failed is not checked: the CLI sets it to true for a Block finding.
@@ -208,8 +215,6 @@ jobs:
             not_scanned 'the report has no scan ID'
           jq -e --arg commit "$SCAN_COMMIT" '.commit_sha == $commit' "$report" > /dev/null ||
             not_scanned 'the report belongs to another commit'
-          [ -n "$BASELINE_SCAN_ID" ] ||
-            not_scanned 'no empty baseline scan was created'
 
           # Ask Socket for the comparison itself. The CLI report does not say which
           # scans were compared or whether the comparison was complete.
