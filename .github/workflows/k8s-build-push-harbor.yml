@@ -47,7 +47,7 @@ concurrency:
 jobs:
   validate:
     name: Validate source and inputs
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
       github_environment: ${{ steps.config.outputs.github_environment }}
       image_tag: ${{ steps.config.outputs.image_tag }}
@@ -117,7 +117,7 @@ jobs:
   publish:
     name: Build and publish image
     needs: validate
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     environment: ${{ needs.validate.outputs.github_environment }}
     outputs:
       image_ref: ${{ steps.push.outputs.image_ref }}
@@ -254,17 +254,24 @@ jobs:
         run: |
           set -euo pipefail
 
+          trivy_dir="$RUNNER_TEMP/trivy"
+          mkdir -p "$trivy_dir/cache" "$trivy_dir/reports"
+          docker save --output "$trivy_dir/image.tar" "$IMAGE_REF"
+
           trivy_args=(
             --rm
-            --volume /var/run/docker.sock:/var/run/docker.sock
-            --volume "$RUNNER_TEMP:/reports"
+            --volume "$trivy_dir/cache:/cache"
+            --volume "$trivy_dir/reports:/reports"
             --volume "$VEX_CONFIG:/root/.trivy/vex/repository.yaml:ro"
-            --env TRIVY_CACHE_DIR=/reports/trivy-cache
+            --env TRIVY_CACHE_DIR=/cache
           )
 
           docker run "${trivy_args[@]}" "$TRIVY_IMAGE" vex repo download
 
-          docker run "${trivy_args[@]}" "$TRIVY_IMAGE" image \
+          docker run "${trivy_args[@]}" \
+            --volume "$trivy_dir/image.tar:/input/image.tar:ro" \
+            "$TRIVY_IMAGE" image \
+            --input /input/image.tar \
             --vex repo \
             --skip-vex-repo-update \
             --show-suppressed \
@@ -273,15 +280,14 @@ jobs:
             --exit-code 0 \
             --pkg-types os,library \
             --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
-            --scanners vuln \
-            "$IMAGE_REF"
+            --scanners vuln
 
       - name: Upload Trivy vulnerability report
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: trivy-${{ github.repository_id }}-${{ inputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/trivy-report.json
+          path: ${{ runner.temp }}/trivy/reports/trivy-report.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -294,7 +300,7 @@ jobs:
           TARGET: ${{ inputs.target }}
           TRIVY_REPORT_ONLY: "true"
           TRIVY_SCAN_OUTCOME: ${{ steps.trivy-scan.outcome }}
-          TRIVY_REPORT: ${{ runner.temp }}/trivy-report.json
+          TRIVY_REPORT: ${{ runner.temp }}/trivy/reports/trivy-report.json
 
       - name: Login to development Harbor
         if: ${{ inputs.target == 'dev' }}

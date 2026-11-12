@@ -147,6 +147,32 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(self.workflow.count('python-version: "3.13.15"'), 2)
 
+    def test_both_jobs_use_ubuntu_24_04(self) -> None:
+        self.assertEqual(
+            re.findall(r"(?m)^    runs-on: (.+)$", self.workflow),
+            ["ubuntu-24.04", "ubuntu-24.04"],
+        )
+
+    def test_trivy_scans_an_archive_without_daemon_or_runner_temp_access(self) -> None:
+        self.assertNotIn("docker.sock", self.workflow)
+        self.assertNotIn('$RUNNER_TEMP:/', self.workflow)
+        self.assertIn('--input /input/image.tar', self.workflow)
+        self.assertIn('"$trivy_dir/image.tar:/input/image.tar:ro"', self.workflow)
+        self.assertIn('"$trivy_dir/cache:/cache"', self.workflow)
+        self.assertIn('"$trivy_dir/reports:/reports"', self.workflow)
+        self.assertIn('TRIVY_CACHE_DIR=/cache', self.workflow)
+        self.assertIn(
+            'path: ${{ runner.temp }}/trivy/reports/trivy-report.json', self.workflow,
+        )
+        self.assertIn(
+            'TRIVY_REPORT: ${{ runner.temp }}/trivy/reports/trivy-report.json',
+            self.workflow,
+        )
+        self.assertLess(
+            self.workflow.index('docker save --output'),
+            self.workflow.index('vex repo download'),
+        )
+
     def test_dhi_validation_uses_exported_dockerfile_before_build_and_login(self) -> None:
         self.assertLess(
             self.workflow.index("command: prepare-context"),

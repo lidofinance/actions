@@ -277,6 +277,12 @@ without an available fix. A JSON report containing all severity levels is stored
 as a workflow artifact for 30 days, and severity counts are written to the job
 summary.
 
+The scanner reads a `docker save` archive through `trivy image --input` without
+access to the Docker socket. Only dedicated cache and report directories under
+`RUNNER_TEMP/trivy` are mounted writable; the image archive and trusted VEX
+configuration are mounted read-only. The image remains loaded in Docker for
+publication without rebuilding. Both reusable workflow jobs use `ubuntu-24.04`.
+
 Trivy uses its standard vulnerability database and applies VEX statements from
 both Aqua VEX Hub and Docker Hardened Images advisories:
 
