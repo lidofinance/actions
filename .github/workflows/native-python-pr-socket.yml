@@ -14,17 +14,20 @@
 #    repositories, so a run never depends on a scan from an earlier run.
 # 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on `reopened`.
 #    Forcing one supported action keeps every PR event on the same scan path.
-# 3. Reachability with a fallback. The scan first runs with --reach, which analyses
-#    the code and lowers findings that cannot be reached. If that analysis does not
-#    complete, the CLI exits 3 without a report, and the step scans again without
-#    --reach. A failed analysis therefore gives more findings, never fewer.
+# 3. Reachability for npm only, with a fallback. The scan first runs with --reach,
+#    which analyses the code and lowers findings that cannot be reached. Other
+#    ecosystems are scanned without it: for Python the engine can build packages
+#    from source, which runs their code in a step that holds both tokens. If the
+#    first attempt exits 3 without a report, the step scans again without --reach.
+#    An analysis that is cut short can still exit 0 with fewer findings. The
+#    workflow cannot detect that.
 # 4. merge_group fails on purpose. The CLI has no merge queue mode; a clear
 #    failure is safer than a green check that scanned nothing.
 #
 # Exit codes of the scan step: 0 = no Block (Warn is allowed), 1 = Block finding,
 # 3 = Socket API or runtime error.
 
-name: Native Python PR Socket
+name: Socket
 
 on:
   pull_request:
@@ -40,6 +43,7 @@ concurrency:
 
 jobs:
   scan:
+    name: Socket dependency security
     runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
     timeout-minutes: 30
     defaults:
@@ -70,11 +74,19 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Set up Node.js for the reachability engine
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22' # the engine needs 22.13 or newer
+
       - name: Install the hash-pinned Socket CLI
         run: |
           python -m pip install --require-hashes --only-binary=:all: \
             -r tooling/.github/tools/socket-python-cli.lock
           socketcli --version
+          node --version
+          npm --version
+          uv --version
 
       - name: Create the empty baseline scan
         id: baseline
@@ -157,6 +169,7 @@ jobs:
           # --disable-ignore      "@SocketSecurity ignore" PR comments have no effect
           # --disable-overview    one security comment, no second overview comment
           # --reach               analyse the code and lower findings that are not reachable
+          # --reach-ecosystems    npm only (see the header)
           # --reach-disable-analytics  do not send analysis statistics to Socket
           scan() {
             socketcli --scm github \
@@ -177,12 +190,12 @@ jobs:
           }
 
           status=0
-          scan --reach --reach-disable-analytics || status=$?
+          scan --reach --reach-ecosystems npm --reach-disable-analytics || status=$?
 
-          # Exit 3 without a report means the scan did not run, usually because the
-          # reachability analysis failed. Scan again without it.
+          # Exit 3 without a report: the first attempt failed before it assessed
+          # anything, most often in the reachability analysis. Scan again without it.
           if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ]; then
-            echo '::warning::Reachability analysis did not complete. Scanning again without it.'
+            echo '::warning::The first scan attempt produced no report. Scanning again without reachability analysis.'
             touch "$RUNNER_TEMP/socket/reachability-fallback"
             find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
             status=0
@@ -218,16 +231,19 @@ jobs:
 
           # Ask Socket for the comparison itself. The CLI report does not say which
           # scans were compared or whether the comparison was complete.
+          # Both answers are kept next to the report and uploaded with it. curl
+          # retries timeouts and 408/429/5xx answers, not 401/403/404.
           socket_api() {
             printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
-              curl -fsS --max-time 60 -K - "$@"
+              curl -fsS --max-time 60 --retry 2 --retry-delay 5 -K - "$@"
           }
           head_scan="$(jq -r '.full_scan_id' "$report")"
-          comparison="$RUNNER_TEMP/comparison.json"
+          comparisons="$RUNNER_TEMP/socket/comparison-list.json"
+          comparison="$RUNNER_TEMP/socket/comparison.json"
 
-          comparison_id="$(socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans?before_full_scan_id=$BASELINE_SCAN_ID&after_full_scan_id=$head_scan" |
-            jq -r 'if (.results | length) == 1 then .results[0].id else empty end')" ||
+          socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans?before_full_scan_id=$BASELINE_SCAN_ID&after_full_scan_id=$head_scan" > "$comparisons" ||
             not_scanned 'Socket did not list the comparison'
+          comparison_id="$(jq -r 'if (.results | length) == 1 then .results[0].id else empty end' "$comparisons")"
           [ -n "$comparison_id" ] ||
             not_scanned 'Socket has no single comparison of this scan with the empty baseline scan'
           socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans/$comparison_id?if_cached=true" > "$comparison" ||
@@ -244,7 +260,7 @@ jobs:
           {
             echo '## Socket dependency scan'
             if [ -e "$RUNNER_TEMP/socket/reachability-fallback" ]; then
-              echo 'Reachability analysis did not complete. These findings are reported without it.'
+              echo 'The scan with reachability analysis produced no report. These findings are reported without it.'
             fi
             if [ -s "$RUNNER_TEMP/socket/summary.txt" ]; then
               echo '```text'
