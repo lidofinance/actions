@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/k8s-build-push-harbor.yml"
-HELPER_SHA = "f3163d72774f0aaaae90aeec0c49b72720b1451c"
+HELPER_SHA = "18f01361a88e2adecf83f692fcb955943827ea61"
 HELPER_REFERENCE = "lidofinance/actions/.github/actions/k8s-harbor-helper"
 SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
 
@@ -51,7 +51,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("  cancel-in-progress: false\n  queue: max", self.workflow)
 
-    def test_rollback_uses_only_the_target_secret(self) -> None:
+    def test_sandbox_prod_uses_dev_credentials_without_weakening_rollback(self) -> None:
         self.assertIn(
             "if: ${{ needs.validate.outputs.is_release == 'true' && "
             "inputs.target == 'prod' }}",
@@ -64,7 +64,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(
             self.workflow.count(
-                "HARBOR_TOKEN: ${{ secrets.HARBOR_PROD_TOKEN }}"
+                "HARBOR_TOKEN: ${{ secrets.HARBOR_DEV_TOKEN }}"
             ),
             2,
         )
@@ -74,10 +74,18 @@ class WorkflowContractTests(unittest.TestCase):
             ),
             2,
         )
-        self.assertNotIn(
-            "secrets.HARBOR_PROD_TOKEN || secrets.HARBOR_CRIT_TOKEN",
-            self.workflow,
+        self.assertNotIn("secrets.HARBOR_PROD_TOKEN", self.workflow)
+        self.assertNotIn("registry.prod.k8s-prod.org", self.workflow)
+        prod_login = re.search(
+            r"(?ms)^      - name: Login to development Harbor for production sandbox test"
+            r".*?(?=^      - name:)", self.workflow,
         )
+        self.assertIsNotNone(prod_login)
+        self.assertIn("if: ${{ inputs.target == 'prod' }}", prod_login.group())
+        self.assertIn("registry: registry.dev.k8s-dev.org", prod_login.group())
+        self.assertIn("password: ${{ secrets.HARBOR_DEV_TOKEN }}", prod_login.group())
+        self.assertNotIn("continue-on-error:", prod_login.group())
+        self.assertNotIn("HARBOR_DEV_TOKEN ||", self.workflow)
 
     def test_all_helper_commands_are_wired(self) -> None:
         commands = set(re.findall(r"          command: ([a-z-]+)", self.workflow))
@@ -100,7 +108,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
 
     def test_harbor_preflight_runs_before_build_without_docker_login(self) -> None:
-        for target, token in (("production", "PROD"), ("critical", "CRIT")):
+        for target, token in (("production", "DEV"), ("critical", "CRIT")):
             block = re.search(
                 rf"(?ms)^      - name: Preflight {target} Harbor release.*?(?=^      - name:)",
                 self.workflow,
