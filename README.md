@@ -181,6 +181,11 @@ Dockerfile cannot copy the runner's Harbor Docker configuration into an image.
 After a successful build, the workflow logs in to the target registry and pushes
 the already-built local image.
 
+For prod/critical, a blocking read-only Harbor preflight runs before the build
+context is prepared. It uses the selected Harbor token only for API requests;
+it does not log Docker in or save Harbor credentials in Docker configuration.
+The same release checks run again after Harbor login, immediately before push.
+
 Before building, it attempts a separate login to the fixed `dhi.io` registry
 using secrets `DHI_USERNAME` and `DHI_TOKEN`. Use a read-only DHI access token,
 available to the publish job through repository/organization secrets or its
@@ -212,10 +217,17 @@ preparation and artifact upload are also best-effort during this period.
 Allowing images without a DHI base is a temporary rollout exception, not a
 permanent relaxation of the base-image policy.
 This conservative static check currently rejects heredocs, non-default escape
-characters, custom Dockerfile frontends, advanced variable substitutions, and
+characters, custom `# syntax=` frontends, advanced variable substitutions, and
 variable image sources outside `FROM`. Use the standard Dockerfile frontend.
 This is not a provenance guarantee: it does not verify image signatures, detect
 arbitrary downloads in `RUN`, or certify registry mirrors as DHI images.
+
+Known limitation / TODO before restoring mandatory DHI enforcement: BuildKit
+also detects alternative frontend directives such as `// syntax=...`, which
+this static parser does not currently validate. A custom frontend can interpret
+the build definition differently from the checked `FROM` lines. Harden this
+boundary separately; do not treat the advisory DHI check as proof of the base
+image. See [BuildKit frontend detection](https://github.com/moby/buildkit/blob/v0.34.2/frontend/dockerfile/parser/directives.go#L117-L126).
 
 Reviewed exceptions are downloaded from `lidofinance/vex-db`, branch `main`,
 file `policy/dhi-exceptions.json`. This source is fixed in the helper's
@@ -319,7 +331,7 @@ shown as **unavailable** in the summary, without inventing zero findings;
 publication continues. There is no empty-VEX fallback presented as a valid scan.
 The workflow sets `TRIVY_REPORT_ONLY=true`; the helper's strict mode remains
 available for future enforcement. The CI scan does not apply Harbor CVE
-allowlists. The official Trivy `v0.67.0` container is pinned by digest; the Harbor
+allowlists. The official Trivy `v0.76.2` container is pinned by digest; the Harbor
 scanner is not upgraded by this change.
 
 Harbor policy is unchanged: CRITICAL vulnerabilities block image pulls in
@@ -330,6 +342,26 @@ Harbor block under this CRITICAL-only policy.
 
 Source validation, build failures, Harbor login, anti-rollback, and push remain
 fatal.
+
+#### Release preflight and partial-failure recovery
+
+Prod/critical preflight rejects an already-published target tag before spending
+time building and scanning. It also validates existing stable SemVer Harbor
+tags against Git history. The final check repeats both validations before push
+to detect changes after preflight; there is no automatic reuse or overwrite of
+an existing stable release image.
+
+Before rollout, audit the existing Harbor release history. Every retained
+stable SemVer tag must have a matching Git tag whose commit belongs to the
+selected production source branch. Restore missing Git tags only from verified
+release records. If history cannot be verified, coordinate a migration decision
+with SecOps; the workflow does not silently ignore legacy tags.
+
+After push, digest lookup makes at most three attempts, with 2- and 4-second
+delays and a 30-second timeout per attempt. If all attempts fail, the error
+explicitly states that push succeeded but digest lookup failed. Inspect the
+existing image and original push logs before rerunning: stable tags remain
+immutable, and preflight rejects a blind rebuild under the same tag.
 
 #### Required repository and Harbor configuration
 

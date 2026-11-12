@@ -7,10 +7,11 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
-from harbor_helper.common import WorkflowError, required
+from harbor_helper.common import WorkflowError, escape_workflow_command, required
 
 
 DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
@@ -147,22 +148,25 @@ def populate_build_info(environment: Mapping[str, str]) -> dict[str, str]:
     return {}
 
 
-def resolve_image_digest(environment: Mapping[str, str]) -> dict[str, str]:
-    remote_ref = required(environment, "REMOTE_REF")
-    result = subprocess.run(
-        [
-            "docker",
-            "buildx",
-            "imagetools",
-            "inspect",
-            remote_ref,
-            "--format",
-            "{{json .Manifest}}",
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+def _inspect_image_digest(remote_ref: str) -> str:
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "buildx",
+                "imagetools",
+                "inspect",
+                remote_ref,
+                "--format",
+                "{{json .Manifest}}",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise WorkflowError(f"Could not inspect {remote_ref} after push: {error}") from error
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "no error output"
         raise WorkflowError(f"Could not inspect {remote_ref} after push: {detail}")
@@ -175,5 +179,28 @@ def resolve_image_digest(environment: Mapping[str, str]) -> dict[str, str]:
     digest = manifest.get("digest") if isinstance(manifest, dict) else None
     if not isinstance(digest, str) or DIGEST_PATTERN.fullmatch(digest) is None:
         raise WorkflowError(f"Could not determine the digest of {remote_ref} after push")
-    print(f"Published {remote_ref}@{digest}")
-    return {"image_ref": remote_ref, "image_digest": digest}
+    return digest
+
+
+def resolve_image_digest(environment: Mapping[str, str]) -> dict[str, str]:
+    remote_ref = required(environment, "REMOTE_REF")
+    for attempt in range(1, 4):
+        try:
+            digest = _inspect_image_digest(remote_ref)
+        except WorkflowError as error:
+            if attempt == 3:
+                raise WorkflowError(
+                    f"Image {remote_ref} was pushed, but its digest could not be "
+                    f"retrieved after 3 attempts. The published image may already "
+                    f"exist; inspect it and the push logs before rerunning. {error}"
+                ) from error
+            print(
+                "::warning::" + escape_workflow_command(
+                    f"Digest lookup attempt {attempt}/3 failed: {error}; retrying"
+                )
+            )
+            time.sleep(2 ** attempt)
+            continue
+        print(f"Published {remote_ref}@{digest}")
+        return {"image_ref": remote_ref, "image_digest": digest}
+    raise AssertionError("Digest lookup retry loop did not finish")

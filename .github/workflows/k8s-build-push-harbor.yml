@@ -150,6 +150,32 @@ jobs:
           SOURCE_BRANCH: ${{ needs.validate.outputs.source_branch }}
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
 
+      - name: Preflight production Harbor release
+        if: ${{ needs.validate.outputs.is_release == 'true' && inputs.target == 'prod' }}
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@59c07e5aefa7e135e92e0c0eeed0e7fc2eb113ac
+        with:
+          command: check-rollback
+        env:
+          HARBOR_TOKEN: ${{ secrets.HARBOR_DEV_TOKEN }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
+          REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}
+          SOURCE_BRANCH: ${{ needs.validate.outputs.source_branch }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+
+      - name: Preflight critical Harbor release
+        if: ${{ needs.validate.outputs.is_release == 'true' && inputs.target == 'critical' }}
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@59c07e5aefa7e135e92e0c0eeed0e7fc2eb113ac
+        with:
+          command: check-rollback
+        env:
+          HARBOR_TOKEN: ${{ secrets.HARBOR_CRIT_TOKEN }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
+          REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}
+          SOURCE_BRANCH: ${{ needs.validate.outputs.source_branch }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+
       - name: Prepare isolated build context
         id: context
         uses: lidofinance/actions/.github/actions/k8s-harbor-helper@59c07e5aefa7e135e92e0c0eeed0e7fc2eb113ac
@@ -249,7 +275,7 @@ jobs:
         shell: bash
         env:
           IMAGE_REF: local-build:${{ github.run_id }}-${{ github.run_attempt }}
-          TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:94711c60051c6cab848a292e3a67f62623fcee361b2bb661f43b17184f4afdac  # v0.67.0
+          TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb  # v0.76.2
           VEX_CONFIG: ${{ steps.trivy-config.outputs.vex_config }}
         run: |
           set -euo pipefail
