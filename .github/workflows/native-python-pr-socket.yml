@@ -117,6 +117,7 @@ jobs:
             exit 3
           fi
           echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
+          echo "org=$org" >> "$GITHUB_OUTPUT"
 
       - name: Check out the PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -190,6 +191,9 @@ jobs:
         if: github.event_name == 'pull_request' && !cancelled()
         env:
           BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+          SOCKET_ORG: ${{ steps.baseline.outputs.org }}
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          BASE_API_URL: https://api.socket.dev/v0
         run: |
           report="$RUNNER_TEMP/socket/report.json"
           not_scanned() {
@@ -206,8 +210,28 @@ jobs:
             not_scanned 'the report belongs to another commit'
           [ -n "$BASELINE_SCAN_ID" ] ||
             not_scanned 'no empty baseline scan was created'
-          jq -e --arg base "$BASELINE_SCAN_ID" '.diff_url | contains("/diff/" + $base + "/")' "$report" > /dev/null ||
-            not_scanned 'the snapshot was not compared with the empty baseline scan'
+
+          # Ask Socket for the comparison itself. The CLI report does not say which
+          # scans were compared or whether the comparison was complete.
+          socket_api() {
+            printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
+              curl -fsS --max-time 60 -K - "$@"
+          }
+          head_scan="$(jq -r '.full_scan_id' "$report")"
+          comparison="$RUNNER_TEMP/comparison.json"
+
+          comparison_id="$(socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans?before_full_scan_id=$BASELINE_SCAN_ID&after_full_scan_id=$head_scan" |
+            jq -r 'if (.results | length) == 1 then .results[0].id else empty end')" ||
+            not_scanned 'Socket did not list the comparison'
+          [ -n "$comparison_id" ] ||
+            not_scanned 'Socket has no single comparison of this scan with the empty baseline scan'
+          socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans/$comparison_id?if_cached=true" > "$comparison" ||
+            not_scanned 'Socket did not return the comparison'
+          jq -e --arg base "$BASELINE_SCAN_ID" --arg head "$head_scan" \
+            '.diff_scan.before_full_scan.id == $base and .diff_scan.after_full_scan.id == $head' "$comparison" > /dev/null ||
+            not_scanned 'the comparison used other scans'
+          jq -e '.diff_scan.incomplete == false' "$comparison" > /dev/null ||
+            not_scanned 'Socket did not confirm that the comparison is complete'
 
       - name: Publish the job summary
         if: always()
