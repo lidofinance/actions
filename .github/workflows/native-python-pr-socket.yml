@@ -11,7 +11,7 @@
 #    comparison. Comparing with an empty scan makes every finding new, so the whole
 #    snapshot is reported. Each run creates its own empty scan in the same Socket
 #    repository, before the PR is checked out. Nothing is shared between runs or
-#    repositories, so there is no stored scan that can expire or be deleted.
+#    repositories, so a run never depends on a scan from an earlier run.
 # 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on `reopened`.
 #    Forcing one supported action keeps every PR event on the same scan path.
 # 3. merge_group fails on purpose. The CLI has no merge queue mode; a clear
@@ -178,8 +178,9 @@ jobs:
 
           [ -s "$report" ] ||
             not_scanned 'the CLI wrote no report'
-          jq -e '.scan_failed == false and (.full_scan_id | length > 0)' "$report" > /dev/null ||
-            not_scanned 'Socket did not complete the scan'
+          # .scan_failed is not checked: the CLI sets it to true for a Block finding.
+          jq -e '.full_scan_id | length > 0' "$report" > /dev/null ||
+            not_scanned 'the report has no scan ID'
           jq -e --arg commit "$SCAN_COMMIT" '.commit_sha == $commit' "$report" > /dev/null ||
             not_scanned 'the report belongs to another commit'
           [ -n "$BASELINE_SCAN_ID" ] ||
