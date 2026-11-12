@@ -86,6 +86,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Remove reachability facts files supplied by the PR
+        # The CLI uploads every .socket.facts.json it finds, and Socket lowers
+        # findings based on that data. A pull request must not be able to supply it.
+        working-directory: candidate
+        run: |
+          find . -path ./.git -prune -o \( -type f -o -type l \) -name '.socket.facts.json*' -print0 |
+            while IFS= read -r -d '' file; do
+              echo "::warning::Ignoring a reachability facts file committed to the repository: $file"
+              rm -f -- "$file"
+            done
+
       - name: Scan the PR snapshot and update the PR comment
         working-directory: candidate
         env:
