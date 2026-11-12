@@ -6,17 +6,12 @@
 #
 # Three things here are not obvious:
 #
-# 1. Empty control scan. Socket Python CLI 2.11.13 only gates and comments when it
+# 1. Empty baseline scan. Socket Python CLI 2.11.13 only gates and comments when it
 #    compares two scans, and its comment lists only findings that are new in that
-#    comparison. Comparing with a stored empty scan makes every finding new, so the
-#    whole snapshot is reported. EMPTY_CONTROL_SCAN_ID is fixed in this file on
-#    purpose: a repository variable could be pointed at a non-empty scan to hide
-#    findings. To create a new empty scan, run in a directory outside any Git
-#    checkout that holds only {"name":"socket-empty-control","version":"1.0.0","private":true}
-#    as package.json:
-#      socketcli --scm api --repo socket-poc-empty-control --branch empty-control \
-#        --target-path . --pr-number 0 --json-file out.json
-#    and copy .full_scan_id from out.json.
+#    comparison. Comparing with an empty scan makes every finding new, so the whole
+#    snapshot is reported. Each run creates its own empty scan in the same Socket
+#    repository, before the PR is checked out. Nothing is shared between runs or
+#    repositories, so there is no stored scan that can expire or be deleted.
 # 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on `reopened`.
 #    Forcing one supported action keeps every PR event on the same scan path.
 # 3. merge_group fails on purpose. The CLI has no merge queue mode; a clear
@@ -47,7 +42,6 @@ jobs:
       run:
         shell: bash
     env:
-      EMPTY_CONTROL_SCAN_ID: 72f57c51-3085-4856-b9f6-aa51fa3dd515
       SCAN_REPO: ${{ github.event.repository.name }}
       SCAN_BRANCH: ${{ github.head_ref }}
       SCAN_COMMIT: ${{ github.event.pull_request.head.sha }}
@@ -78,6 +72,31 @@ jobs:
             -r tooling/.github/tools/socket-python-cli.lock
           socketcli --version
 
+      - name: Create the empty baseline scan
+        id: baseline
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          BASE_API_URL: https://api.socket.dev/v0
+        run: |
+          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event (fork and Dependabot PRs need a separate decision)}"
+          mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
+          cd "$RUNNER_TEMP/socket-empty"
+
+          # An empty directory outside Git: the CLI uploads one empty scan and
+          # compares it with nothing.
+          socketcli --scm api \
+            --repo "$SCAN_REPO" \
+            --branch socket-empty-baseline \
+            --target-path . \
+            --json-file "$RUNNER_TEMP/socket/baseline.json"
+
+          scan_id="$(jq -r '.full_scan_id // empty' "$RUNNER_TEMP/socket/baseline.json")"
+          if [ -z "$scan_id" ]; then
+            echo '::error::The CLI did not return the ID of the empty baseline scan.'
+            exit 3
+          fi
+          echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
+
       - name: Check out the PR head
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -105,11 +124,9 @@ jobs:
           EVENT_ACTION: synchronize
           # Set explicitly so that no .env file can redirect the API key elsewhere.
           BASE_API_URL: https://api.socket.dev/v0
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
         run: |
-          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event (fork and Dependabot PRs need a separate decision)}"
-          mkdir -p "$RUNNER_TEMP/socket"
-
-          # --base-scan-id        compare with the empty control: every finding is new
+          # --base-scan-id        compare with the empty baseline: every finding is new
           # --ignore-commit-files scan even when the PR touches no manifest file
           # --strict-blocking     fail on any Block, not only on new ones
           # --disable-ignore      "@SocketSecurity ignore" PR comments have no effect
@@ -121,7 +138,7 @@ jobs:
             --commit-sha "$SCAN_COMMIT" \
             --pr-number "$PR_NUMBER" \
             --target-path . \
-            --base-scan-id "$EMPTY_CONTROL_SCAN_ID" \
+            --base-scan-id "$BASELINE_SCAN_ID" \
             --ignore-commit-files \
             --strict-blocking \
             --disable-ignore \
@@ -133,6 +150,8 @@ jobs:
         # A green scan step is not enough: the CLI exits 0 when it skips the
         # comparison. Runs after a Block failure too, but not after a cancel.
         if: github.event_name == 'pull_request' && !cancelled()
+        env:
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
         run: |
           report="$RUNNER_TEMP/socket/report.json"
           not_scanned() {
@@ -146,8 +165,10 @@ jobs:
             not_scanned 'Socket did not complete the scan'
           jq -e --arg commit "$SCAN_COMMIT" '.commit_sha == $commit' "$report" > /dev/null ||
             not_scanned 'the report belongs to another commit'
-          jq -e --arg base "$EMPTY_CONTROL_SCAN_ID" '.diff_url | contains("/diff/" + $base + "/")' "$report" > /dev/null ||
-            not_scanned 'the snapshot was not compared with the empty control scan'
+          [ -n "$BASELINE_SCAN_ID" ] ||
+            not_scanned 'no empty baseline scan was created'
+          jq -e --arg base "$BASELINE_SCAN_ID" '.diff_url | contains("/diff/" + $base + "/")' "$report" > /dev/null ||
+            not_scanned 'the snapshot was not compared with the empty baseline scan'
 
       - name: Publish the job summary
         if: always()
