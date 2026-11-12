@@ -82,17 +82,22 @@ jobs:
           mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
           cd "$RUNNER_TEMP/socket-empty"
 
-          # An empty directory outside Git: the CLI uploads one empty scan and
-          # compares it with nothing.
-          socketcli --scm api \
-            --repo "$SCAN_REPO" \
-            --branch socket-empty-baseline \
-            --target-path . \
-            --json-file "$RUNNER_TEMP/socket/baseline.json"
+          # The API accepts only known manifest names. An empty facts document is
+          # the placeholder the CLI itself uses for an empty scan.
+          echo '{"components": []}' > .socket.facts.json
 
-          scan_id="$(jq -r '.full_scan_id // empty' "$RUNNER_TEMP/socket/baseline.json")"
+          # tmp=true keeps this service scan out of the Socket dashboard. The CLI
+          # has no flag for it, so this one request goes to the API directly.
+          org="$(curl -fsS -u "$SOCKET_SECURITY_API_KEY:" "$BASE_API_URL/organizations" |
+            jq -r '.organizations | to_entries | if length == 1 then .[0].value.slug else empty end')"
+          curl -fsS -u "$SOCKET_SECURITY_API_KEY:" -X POST \
+            -F '.socket.facts.json=@.socket.facts.json' \
+            "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline&tmp=true" \
+            > "$RUNNER_TEMP/socket/baseline.json"
+
+          scan_id="$(jq -r '.id // empty' "$RUNNER_TEMP/socket/baseline.json")"
           if [ -z "$scan_id" ]; then
-            echo '::error::The CLI did not return the ID of the empty baseline scan.'
+            echo '::error::Socket did not return the ID of the empty baseline scan.'
             exit 3
           fi
           echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
