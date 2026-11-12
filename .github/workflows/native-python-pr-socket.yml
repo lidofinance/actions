@@ -86,11 +86,23 @@ jobs:
           # the placeholder the CLI itself uses for an empty scan.
           echo '{"components": []}' > .socket.facts.json
 
+          # curl reads the API key from stdin, so the key never appears in a
+          # process argument list.
+          socket_api() {
+            printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
+              curl -fsS --max-time 60 -K - "$@"
+          }
+
+          org="$(socket_api "$BASE_API_URL/organizations" |
+            jq -r '.organizations | to_entries | if length == 1 then .[0].value.slug else empty end')"
+          if [ -z "$org" ]; then
+            echo '::error::The Socket API key must belong to exactly one organization.'
+            exit 3
+          fi
+
           # tmp=true keeps this service scan out of the Socket dashboard. The CLI
           # has no flag for it, so this one request goes to the API directly.
-          org="$(curl -fsS -u "$SOCKET_SECURITY_API_KEY:" "$BASE_API_URL/organizations" |
-            jq -r '.organizations | to_entries | if length == 1 then .[0].value.slug else empty end')"
-          curl -fsS -u "$SOCKET_SECURITY_API_KEY:" -X POST \
+          socket_api -X POST \
             -F '.socket.facts.json=@.socket.facts.json' \
             "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline&tmp=true" \
             > "$RUNNER_TEMP/socket/baseline.json"
