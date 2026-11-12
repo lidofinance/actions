@@ -103,18 +103,24 @@ def check_rollback(
     ):
         raise WorkflowError(f"Harbor returned an invalid tag list for {remote_name}")
 
+    image_tag = required(environment, "IMAGE_TAG")
+    if image_tag in (tags or []):
+        raise WorkflowError(
+            f"Release image {remote_name}:{image_tag} already exists in Harbor; "
+            "stable tags must not be rebuilt or overwritten. A previous run may "
+            "have published it before failing to retrieve its digest; verify the "
+            "existing image and previous run before retrying"
+        )
+
     stable_tags = [tag for tag in tags or [] if SEMVER_PATTERN.fullmatch(tag)]
     if not stable_tags:
         print(f"No stable release tags found in {remote_name}; skipping rollback check")
         return {}
 
-    image_tag = required(environment, "IMAGE_TAG")
     source_branch = required(environment, "SOURCE_BRANCH")
     source_sha = required(environment, "SOURCE_SHA")
     checked = 0
     for release_tag in stable_tags:
-        if release_tag == image_tag:
-            continue
         try:
             release_sha = git_text(
                 "rev-parse",
@@ -124,7 +130,9 @@ def check_rollback(
             )
         except WorkflowError as error:
             raise WorkflowError(
-                f"Harbor release {remote_name}:{release_tag} has no matching Git tag"
+                f"Harbor release {remote_name}:{release_tag} has no matching Git tag; "
+                "verify legacy release history and restore the verified Git tag "
+                "before retrying"
             ) from error
         branch_ref = f"refs/remotes/origin/{source_branch}"
         if not git_is_ancestor(release_sha, branch_ref, cwd=cwd):

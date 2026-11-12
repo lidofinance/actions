@@ -1,3 +1,5 @@
+from unittest import mock
+
 from harbor_helper.common import HttpResponse
 from harbor_helper.harbor import check_rollback
 from support import GitFixture, ResponseQueue, TemporaryTestCase
@@ -31,7 +33,7 @@ class RollbackTests(TemporaryTestCase):
         )
 
     def test_forward_release(self) -> None:
-        responses = self.responses(["v1.0.0", "v1.1.0", "dev"])
+        responses = self.responses(["v1.0.0", "dev"])
         check_rollback(self.environment(), cwd=self.checkout, http_get=responses)
         self.assertTrue(responses.requests[0][1]["Authorization"].startswith("Basic "))
         self.assertEqual(
@@ -55,6 +57,30 @@ class RollbackTests(TemporaryTestCase):
             self.environment(),
             cwd=self.checkout,
             http_get=self.responses(["v9.9.9"]),
+        )
+
+    def test_existing_release_tag_is_rejected_before_git_history_lookup(self) -> None:
+        with mock.patch("harbor_helper.harbor.git_text") as git_lookup:
+            self.assert_workflow_error(
+                "already exists in Harbor",
+                check_rollback,
+                self.environment(),
+                cwd=self.checkout,
+                http_get=self.responses(["v1.1.0"]),
+            )
+        git_lookup.assert_not_called()
+
+    def test_final_check_catches_tag_published_after_preflight(self) -> None:
+        check_rollback(
+            self.environment(), cwd=self.checkout,
+            http_get=self.responses(["v1.0.0"]),
+        )
+        self.assert_workflow_error(
+            "already exists in Harbor",
+            check_rollback,
+            self.environment(),
+            cwd=self.checkout,
+            http_get=self.responses(["v1.0.0", "v1.1.0"]),
         )
 
     def test_tag_outside_production_branch_is_rejected(self) -> None:

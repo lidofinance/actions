@@ -40,7 +40,7 @@ class WorkflowContractTests(unittest.TestCase):
         references = re.findall(
             rf"uses: {re.escape(HELPER_REFERENCE)}@([0-9a-f]{{40}})", self.workflow
         )
-        self.assertEqual(len(references), 13)
+        self.assertEqual(len(references), 15)
         self.assertEqual(set(references), {HELPER_SHA})
 
     def test_concurrency_is_scoped_to_image_and_queues_all_runs(self) -> None:
@@ -66,13 +66,13 @@ class WorkflowContractTests(unittest.TestCase):
             self.workflow.count(
                 "HARBOR_TOKEN: ${{ secrets.HARBOR_PROD_TOKEN }}"
             ),
-            1,
+            2,
         )
         self.assertEqual(
             self.workflow.count(
                 "HARBOR_TOKEN: ${{ secrets.HARBOR_CRIT_TOKEN }}"
             ),
-            1,
+            2,
         )
         self.assertNotIn(
             "secrets.HARBOR_PROD_TOKEN || secrets.HARBOR_CRIT_TOKEN",
@@ -97,6 +97,32 @@ class WorkflowContractTests(unittest.TestCase):
                 "validate-release",
                 "validate-source",
             },
+        )
+
+    def test_harbor_preflight_runs_before_build_without_docker_login(self) -> None:
+        for target, token in (("production", "PROD"), ("critical", "CRIT")):
+            block = re.search(
+                rf"(?ms)^      - name: Preflight {target} Harbor release.*?(?=^      - name:)",
+                self.workflow,
+            )
+            self.assertIsNotNone(block)
+            self.assertIn("command: check-rollback", block.group())
+            self.assertIn(f"HARBOR_TOKEN: ${{{{ secrets.HARBOR_{token}_TOKEN }}}}", block.group())
+            self.assertNotIn("continue-on-error:", block.group())
+            self.assertNotIn("docker/login-action", block.group())
+            self.assertLess(block.start(), self.workflow.index("name: Prepare isolated build context"))
+        self.assertLess(
+            self.workflow.index("command: revalidate-release"),
+            self.workflow.index("name: Preflight production Harbor release"),
+        )
+        self.assertEqual(self.workflow.count("command: check-rollback"), 4)
+        self.assertLess(
+            self.workflow.index("name: Login to critical Harbor"),
+            self.workflow.index("name: Prevent production release rollback"),
+        )
+        self.assertLess(
+            self.workflow.index("name: Prevent critical release rollback"),
+            self.workflow.index("name: Push Docker image"),
         )
 
     def test_vex_is_loaded_from_the_pinned_helper_and_downloaded_before_scanning(self) -> None:
@@ -139,6 +165,32 @@ class WorkflowContractTests(unittest.TestCase):
             2,
         )
         self.assertEqual(self.workflow.count('python-version: "3.13.15"'), 2)
+
+    def test_both_jobs_use_ubuntu_24_04(self) -> None:
+        self.assertEqual(
+            re.findall(r"(?m)^    runs-on: (.+)$", self.workflow),
+            ["ubuntu-24.04", "ubuntu-24.04"],
+        )
+
+    def test_trivy_scans_an_archive_without_daemon_or_runner_temp_access(self) -> None:
+        self.assertNotIn("docker.sock", self.workflow)
+        self.assertNotIn('$RUNNER_TEMP:/', self.workflow)
+        self.assertIn('--input /input/image.tar', self.workflow)
+        self.assertIn('"$trivy_dir/image.tar:/input/image.tar:ro"', self.workflow)
+        self.assertIn('"$trivy_dir/cache:/cache"', self.workflow)
+        self.assertIn('"$trivy_dir/reports:/reports"', self.workflow)
+        self.assertIn('TRIVY_CACHE_DIR=/cache', self.workflow)
+        self.assertIn(
+            'path: ${{ runner.temp }}/trivy/reports/trivy-report.json', self.workflow,
+        )
+        self.assertIn(
+            'TRIVY_REPORT: ${{ runner.temp }}/trivy/reports/trivy-report.json',
+            self.workflow,
+        )
+        self.assertLess(
+            self.workflow.index('docker save --output'),
+            self.workflow.index('vex repo download'),
+        )
 
     def test_dhi_validation_uses_exported_dockerfile_before_build_and_login(self) -> None:
         self.assertLess(
@@ -232,7 +284,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_trivy_version_is_digest_pinned(self) -> None:
         self.assertIn(
             "TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:"
-            "94711c60051c6cab848a292e3a67f62623fcee361b2bb661f43b17184f4afdac  # v0.67.0",
+            "8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb  # v0.76.2",
             self.workflow,
         )
         self.assertIn("--pkg-types os,library", self.workflow)
