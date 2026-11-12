@@ -1,0 +1,176 @@
+# Socket dependency scan for pull requests, selected from an organization ruleset.
+#
+# What it does: scans every dependency manifest at the PR head (the whole branch,
+# not only the lines the PR changed), lists every Warn/Block finding in one PR
+# comment, and fails the job when the organization policy says Block.
+#
+# Three things here are not obvious:
+#
+# 1. Empty control baseline. Socket Python CLI 2.11.13 only gates and comments
+#    when it compares two scans, and its comment lists only findings that are new
+#    in that comparison. Comparing against an empty scan makes every finding new,
+#    so the whole snapshot is reported. A real default-branch baseline is not
+#    used and cannot hide anything.
+# 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on `reopened`.
+#    Forcing one supported action keeps every PR event on the same scan path.
+# 3. merge_group fails on purpose. The CLI has no merge queue mode; a clear
+#    failure is safer than a green check that scanned nothing.
+#
+# Exit codes of the scan step: 0 = no Block (Warn is allowed), 1 = Block finding,
+# 3 = Socket API or runtime error.
+
+name: Native Python PR Socket
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: write # the CLI creates and updates its own PR comment
+
+concurrency:
+  group: socket-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOCKET_REPO: ${{ github.event.repository.name }}
+      SCAN_BRANCH: ${{ github.head_ref }}
+      SCAN_COMMIT: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      # Optional: reuse one stored empty scan instead of uploading one per run.
+      SHARED_EMPTY_SCAN_ID: ${{ vars.SOCKET_EMPTY_BASE_SCAN_ID }}
+      # Optional: Socket repository that receives the per-run empty control scan.
+      CONTROL_REPO: ${{ vars.SOCKET_EMPTY_CONTROL_REPO || github.event.repository.name }}
+    steps:
+      - name: Fail on merge queue events (not supported yet)
+        if: github.event_name == 'merge_group'
+        run: |
+          echo '::error::Socket Python CLI 2.11.13 cannot scan merge_group events. Add merge queue support before enforcing this workflow on repositories that use a merge queue.'
+          exit 2
+
+      - name: Check out the scanner lock file from the central repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: lidofinance/actions
+          ref: ${{ github.workflow_sha }} # same commit as this workflow file
+          path: tooling
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install the hash-pinned Socket CLI
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: \
+            -r tooling/.github/tools/socket-python-cli.lock
+          socketcli --version
+
+      - name: Check out the PR head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.SCAN_COMMIT }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create or reuse the empty control baseline
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event (fork and Dependabot PRs need a separate decision)}"
+          mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
+          if [ -n "$SHARED_EMPTY_SCAN_ID" ]; then
+            echo "Reusing the shared empty control scan $SHARED_EMPTY_SCAN_ID"
+            echo "BASE_SCAN_ID=$SHARED_EMPTY_SCAN_ID" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo '{"name":"socket-empty-control","version":"1.0.0","private":true}' \
+            > "$RUNNER_TEMP/socket-empty/package.json"
+
+          # --scm api and --pr-number 0: plain upload, no PR comment for this scan.
+          # The branch name is unique per run and is never the default branch,
+          # so the Socket dashboard baseline is left alone.
+          socketcli --scm api \
+            --repo "$CONTROL_REPO" \
+            --branch "socket-empty-control-$GITHUB_RUN_ID" \
+            --target-path "$RUNNER_TEMP/socket-empty" \
+            --pr-number 0 \
+            --json-file "$RUNNER_TEMP/socket/baseline.json"
+
+          base_scan_id=$(jq -er '.full_scan_id | select(length > 0)' "$RUNNER_TEMP/socket/baseline.json")
+          echo "BASE_SCAN_ID=$base_scan_id" >> "$GITHUB_ENV"
+
+      - name: Scan the PR snapshot and update the PR comment
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          GH_API_TOKEN: ${{ github.token }}
+          EVENT_ACTION: synchronize
+        run: |
+          # --base-scan-id        compare with the empty control: every finding is new
+          # --ignore-commit-files scan even when the PR touches no manifest file
+          # --strict-blocking     fail on any Block, not only on new ones
+          # --disable-ignore      "@SocketSecurity ignore" PR comments have no effect
+          # --disable-overview    one security comment, no second overview comment
+          socketcli --scm github \
+            --owner "$GITHUB_REPOSITORY_OWNER" \
+            --repo "$SOCKET_REPO" \
+            --branch "$SCAN_BRANCH" \
+            --commit-sha "$SCAN_COMMIT" \
+            --pr-number "$PR_NUMBER" \
+            --target-path . \
+            --base-scan-id "$BASE_SCAN_ID" \
+            --ignore-commit-files \
+            --strict-blocking \
+            --disable-ignore \
+            --disable-overview \
+            --json-file "$RUNNER_TEMP/socket/report.json" \
+            --summary-file "$RUNNER_TEMP/socket/summary.txt"
+
+      - name: Confirm that the scan really assessed this commit
+        # A green scan step is not enough: the CLI exits 0 when it skips the
+        # comparison. Runs after a Block failure too, but not after a cancel.
+        if: success() || failure()
+        run: |
+          jq -e --arg commit "$SCAN_COMMIT" --arg base "$BASE_SCAN_ID" '
+            .scan_failed == false
+            and (.full_scan_id | length > 0)
+            and .commit_sha == $commit
+            and (.diff_url | contains("/diff/" + $base + "/"))
+          ' "$RUNNER_TEMP/socket/report.json" > /dev/null || {
+            echo '::error::Socket did not return a completed comparison for this commit. Treat the PR as not scanned.'
+            exit 3
+          }
+
+      - name: Publish the job summary
+        if: always()
+        run: |
+          {
+            echo '## Socket dependency scan'
+            if [ -s "$RUNNER_TEMP/socket/summary.txt" ]; then
+              echo '```text'
+              cat "$RUNNER_TEMP/socket/summary.txt"
+              echo '```'
+            else
+              echo 'No completed assessment. See the failed step.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: socket-report
+          path: ${{ runner.temp }}/socket/
+          retention-days: 7
