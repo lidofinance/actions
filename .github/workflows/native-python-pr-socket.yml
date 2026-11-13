@@ -14,11 +14,12 @@
 #    repositories, so a run never depends on a scan from an earlier run.
 # 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on `reopened`.
 #    Forcing one supported action keeps every PR event on the same scan path.
-# 3. Reachability for npm only, with a fallback. The scan first runs with --reach,
-#    which analyses the code and lowers findings that cannot be reached. Other
-#    ecosystems are scanned without it: for Python the engine can build packages
-#    from source, which runs their code in a step that holds both tokens. If the
-#    first attempt exits 3 without a report, the step scans again without --reach.
+# 3. Reachability with a fallback. The scan first runs with --reach, which analyses
+#    the code and lowers findings that cannot be reached. If the first attempt
+#    exits 3 without a report, the step scans again without --reach.
+#    Accepted risk: for Rust the engine runs build scripts from the PR, and for
+#    Python it builds packages that have no wheel. That code runs in a step that
+#    holds the Socket token and the job's GitHub token.
 #    An analysis that is cut short can still exit 0 with fewer findings. The
 #    workflow cannot detect that.
 # 4. merge_group fails on purpose. The CLI has no merge queue mode; a clear
@@ -169,7 +170,6 @@ jobs:
           # --disable-ignore      "@SocketSecurity ignore" PR comments have no effect
           # --disable-overview    one security comment, no second overview comment
           # --reach               analyse the code and lower findings that are not reachable
-          # --reach-ecosystems    npm only (see the header)
           # --reach-disable-analytics  do not send analysis statistics to Socket
           scan() {
             socketcli --scm github \
@@ -190,7 +190,7 @@ jobs:
           }
 
           status=0
-          scan --reach --reach-ecosystems npm --reach-disable-analytics || status=$?
+          scan --reach --reach-disable-analytics || status=$?
 
           # Exit 3 without a report: the first attempt failed before it assessed
           # anything, most often in the reachability analysis. Scan again without it.
