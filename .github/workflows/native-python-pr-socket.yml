@@ -171,6 +171,10 @@ jobs:
           # --disable-overview    one security comment, no second overview comment
           # --reach               analyse the code and lower findings that are not reachable
           # --reach-disable-analytics  do not send analysis statistics to Socket
+          #
+          # The last two flags are kept in reach_flags, because the second attempt
+          # below runs the same command without them.
+          reach_flags=(--reach --reach-disable-analytics)
           scan() {
             socketcli --scm github \
               --owner "$GITHUB_REPOSITORY_OWNER" \
@@ -186,11 +190,11 @@ jobs:
               --disable-overview \
               --json-file "$RUNNER_TEMP/socket/report.json" \
               --summary-file "$RUNNER_TEMP/socket/summary.txt" \
-              "$@"
+              "${reach_flags[@]}"
           }
 
           status=0
-          scan --reach --reach-disable-analytics || status=$?
+          scan || status=$?
 
           # Exit 3 without a report: the first attempt failed before it assessed
           # anything, most often in the reachability analysis. Scan again without it.
@@ -198,6 +202,7 @@ jobs:
             echo '::warning::The first scan attempt produced no report. Scanning again without reachability analysis.'
             touch "$RUNNER_TEMP/socket/reachability-fallback"
             find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
+            reach_flags=()
             status=0
             scan || status=$?
           fi
