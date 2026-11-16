@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from harbor_helper.cli import COMMANDS
+from support import GitFixture
 
 
 ACTION_ROOT = Path(__file__).resolve().parents[1]
@@ -52,11 +53,11 @@ class CliTests(unittest.TestCase):
         return environment
 
     def run_cli(
-        self, command: str, environment: dict[str, str]
+        self, command: str, environment: dict[str, str], *, cwd: Path | None = None
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(ENTRYPOINT), command],
-            cwd=self.root,
+            cwd=cwd or self.root,
             env=environment,
             text=True,
             capture_output=True,
@@ -79,6 +80,30 @@ class CliTests(unittest.TestCase):
         result = self.run_cli("configure", self.environment(IMAGE="invalid,image"))
         self.assertEqual(result.returncode, 1)
         self.assertIn("::error::Invalid image name", result.stdout)
+
+    def test_manual_configure_and_source_validation_build_input_tag_not_caller_sha(self) -> None:
+        fixture = GitFixture(self.root)
+        environment = self.environment(
+            GITHUB_EVENT_NAME="workflow_dispatch", TAG="v1.1.0",
+        )
+        for key in tuple(environment):
+            if key.startswith("UPSTREAM_"):
+                del environment[key]
+        result = self.run_cli("configure", environment)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        output_path = Path(environment["GITHUB_OUTPUT"])
+        outputs = dict(line.split("=", 1) for line in output_path.read_text().splitlines())
+        self.assertEqual(outputs["source_ref"], "v1.1.0")
+        environment.update(
+            IMAGE_TAG=outputs["image_tag"],
+            IS_RELEASE=outputs["is_release"],
+            REQUESTED_SOURCE_BRANCH=outputs["requested_source_branch"],
+        )
+        checkout = fixture.clone_at(outputs["source_ref"])
+        result = self.run_cli("validate-source", environment, cwd=checkout)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"source_sha={fixture.second_sha}", output_path.read_text())
+        self.assertNotEqual(fixture.second_sha, environment["GITHUB_SHA"])
 
     def test_unknown_command_is_rejected(self) -> None:
         result = self.run_cli("unknown", self.environment())

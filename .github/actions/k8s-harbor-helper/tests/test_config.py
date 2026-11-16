@@ -71,12 +71,79 @@ class ConfigureTests(TemporaryTestCase):
             self.environment(UPSTREAM_REPOSITORY="attacker/application"),
         )
 
-    def test_direct_dispatch_is_rejected(self) -> None:
+    def dispatch_environment(self, **overrides: str) -> dict[str, str]:
+        environment = self.environment(GITHUB_EVENT_NAME="workflow_dispatch")
+        for key in tuple(environment):
+            if key.startswith("UPSTREAM_"):
+                del environment[key]
+        environment.update(overrides)
+        return environment
+
+    def test_prod_dispatch_uses_input_tag_without_upstream_event(self) -> None:
+        outputs = configure(self.dispatch_environment())
+        self.assertEqual(outputs["source_ref"], "v1.2.3")
+        self.assertEqual(outputs["image_tag"], "v1.2.3")
+        self.assertEqual(outputs["is_release"], "true")
+        self.assertEqual(outputs["requested_source_branch"], "")
+        self.assertEqual(outputs["github_environment"], "harbor_dev_release")
+
+    def test_prod_dispatch_from_another_branch_or_tag_ref_is_rejected(self) -> None:
+        for overrides in (
+            {"REF_NAME": "feature/untrusted"},
+            {"REF_NAME": "v1.2.3", "REF_TYPE": "tag"},
+        ):
+            with self.subTest(overrides=overrides):
+                self.assert_workflow_error(
+                    "must run from the repository default branch",
+                    configure,
+                    self.dispatch_environment(**overrides),
+                )
+
+    def test_prod_dispatch_requires_stable_tag(self) -> None:
+        for tag in ("", "latest", "v1.2.3-rc.1", "--help"):
+            with self.subTest(tag=tag):
+                self.assert_workflow_error(
+                    "requires a stable release tag",
+                    configure,
+                    self.dispatch_environment(TAG=tag),
+                )
+
+    def test_prod_dispatch_requires_valid_default_branch(self) -> None:
+        for branch in ("", "invalid branch"):
+            with self.subTest(branch=branch):
+                self.assert_workflow_error(
+                    "Repository default branch.*is invalid",
+                    configure,
+                    self.dispatch_environment(DEFAULT_BRANCH=branch),
+                )
+
+    def test_critical_dispatch_is_still_rejected(self) -> None:
         self.assert_workflow_error(
-            "must be started by a workflow_run",
+            "critical builds must be started by workflow_run",
             configure,
-            self.environment(GITHUB_EVENT_NAME="workflow_dispatch"),
+            self.dispatch_environment(TARGET="critical"),
         )
+
+    def test_other_prod_events_are_rejected(self) -> None:
+        for event in ("", "push", "pull_request", "release", "workflow_call"):
+            with self.subTest(event=event):
+                self.assert_workflow_error(
+                    "prod builds must be started by",
+                    configure,
+                    self.environment(GITHUB_EVENT_NAME=event),
+                )
+
+    def test_automatic_release_still_requires_upstream_metadata(self) -> None:
+        for overrides in (
+            {"UPSTREAM_EVENT": ""},
+            {"UPSTREAM_CONCLUSION": ""},
+            {"UPSTREAM_PATH": ""},
+            {"UPSTREAM_REPOSITORY": ""},
+        ):
+            with self.subTest(overrides=overrides):
+                self.assert_workflow_error(
+                    "upstream|Upstream", configure, self.environment(**overrides),
+                )
 
     def test_failed_upstream_is_rejected(self) -> None:
         self.assert_workflow_error(

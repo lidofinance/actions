@@ -14,10 +14,12 @@ class SourceValidationTests(TemporaryTestCase):
         tag: str,
         upstream_sha: str,
         image_tag: str | None = None,
+        event_name: str = "workflow_run",
     ) -> dict[str, str]:
         checkout = fixture.clone_at(tag)
         return validate_source(
             {
+                "GITHUB_EVENT_NAME": event_name,
                 "IMAGE_TAG": image_tag or tag,
                 "IS_RELEASE": "true",
                 "REQUESTED_SOURCE_BRANCH": "",
@@ -38,26 +40,102 @@ class SourceValidationTests(TemporaryTestCase):
         outputs = self.validate(fixture, "v1.1.0", fixture.second_sha)
         self.assertEqual(outputs["source_branch"], "master")
 
+    def test_manual_release_does_not_require_an_upstream_sha(self) -> None:
+        for branch in ("main", "master"):
+            with self.subTest(branch=branch):
+                fixture_root = self.root / branch
+                fixture_root.mkdir()
+                fixture = GitFixture(fixture_root, branch)
+                outputs = self.validate(
+                    fixture, "v1.1.0", "", event_name="workflow_dispatch",
+                )
+                self.assertEqual(
+                    outputs,
+                    {"source_branch": branch, "source_sha": fixture.second_sha},
+                )
+
+    def test_manual_release_still_rejects_divergent_tag(self) -> None:
+        fixture = GitFixture(self.root)
+        fixture.add_divergent_tag()
+        self.assert_workflow_error(
+            "is not contained in branch main",
+            self.validate,
+            fixture,
+            "v2.0.0",
+            "",
+            event_name="workflow_dispatch",
+        )
+
+    def test_manual_release_still_checks_tag_matches_checkout(self) -> None:
+        fixture = GitFixture(self.root)
+        self.assert_workflow_error(
+            "does not match tag v1.0.0",
+            self.validate,
+            fixture,
+            "v1.1.0",
+            "",
+            image_tag="v1.0.0",
+            event_name="workflow_dispatch",
+        )
+
+    def test_missing_event_is_rejected_for_release_source(self) -> None:
+        fixture = GitFixture(self.root)
+        self.assert_workflow_error(
+            "Required environment variable GITHUB_EVENT_NAME is empty",
+            self.validate,
+            fixture,
+            "v1.1.0",
+            fixture.second_sha,
+            event_name="",
+        )
+
+    def test_unexpected_event_is_rejected_for_release_source(self) -> None:
+        fixture = GitFixture(self.root)
+        self.assert_workflow_error(
+            "Unsupported release source event",
+            self.validate,
+            fixture,
+            "v1.1.0",
+            fixture.second_sha,
+            event_name="push",
+        )
+
+    def test_automatic_release_without_upstream_sha_is_rejected(self) -> None:
+        fixture = GitFixture(self.root)
+        self.assert_workflow_error(
+            "does not match upstream workflow_run commit",
+            self.validate,
+            fixture,
+            "v1.1.0",
+            "",
+        )
+
     def test_both_production_branches_are_rejected(self) -> None:
         fixture = GitFixture(self.root)
         fixture.add_second_production_branch()
-        self.assert_workflow_error(
-            "Both production branches",
-            self.validate,
-            fixture,
-            "v1.1.0",
-            fixture.second_sha,
-        )
+        for event in ("workflow_run", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assert_workflow_error(
+                    "Both production branches",
+                    self.validate,
+                    fixture,
+                    "v1.1.0",
+                    fixture.second_sha if event == "workflow_run" else "",
+                    event_name=event,
+                )
 
     def test_missing_production_branch_is_rejected(self) -> None:
         fixture = GitFixture(self.root, "develop")
-        self.assert_workflow_error(
-            "Neither production branch",
-            self.validate,
-            fixture,
-            "v1.1.0",
-            fixture.second_sha,
-        )
+        for event in ("workflow_run", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assert_workflow_error(
+                    "Neither production branch",
+                    self.validate,
+                    fixture,
+                    "v1.1.0",
+                    fixture.second_sha if event == "workflow_run" else "",
+                    event_name=event,
+                )
 
     def test_commit_outside_production_branch_is_rejected(self) -> None:
         fixture = GitFixture(self.root)
