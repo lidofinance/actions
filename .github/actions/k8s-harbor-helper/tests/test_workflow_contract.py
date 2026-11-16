@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/k8s-build-push-harbor.yml"
-HELPER_SHA = "18f01361a88e2adecf83f692fcb955943827ea61"
+HELPER_SHA = "2b9c8e2ef829bf598cbe932faafb02cc7081e67e"
 HELPER_REFERENCE = "lidofinance/actions/.github/actions/k8s-harbor-helper"
 SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
 
@@ -106,6 +106,28 @@ class WorkflowContractTests(unittest.TestCase):
                 "validate-source",
             },
         )
+
+    def test_source_validation_receives_the_original_caller_event(self) -> None:
+        block = re.search(
+            r"(?ms)^      - name: Validate source\n.*?(?=^      - name:)",
+            self.workflow,
+        )
+        self.assertIsNotNone(block)
+        self.assertIn("GITHUB_EVENT_NAME: ${{ github.event_name }}", block.group())
+        self.assertIn("UPSTREAM_SHA: ${{ github.event.workflow_run.head_sha }}", block.group())
+        self.assertNotIn("continue-on-error:", block.group())
+
+    def test_manual_release_keeps_published_release_validation_and_revalidation(self) -> None:
+        for name in ("Validate published GitHub Release", "Revalidate release source"):
+            with self.subTest(name=name):
+                block = re.search(
+                    rf"(?ms)^      - name: {name}\n.*?(?=^      - name:)",
+                    self.workflow,
+                )
+                self.assertIsNotNone(block)
+                self.assertIn("outputs.is_release == 'true'", block.group())
+                self.assertNotIn("github.event_name", block.group())
+                self.assertNotIn("continue-on-error:", block.group())
 
     def test_harbor_preflight_runs_before_build_without_docker_login(self) -> None:
         for target, token in (("production", "DEV"), ("critical", "CRIT")):

@@ -87,16 +87,18 @@ fixed token name for the requested target; the caller cannot choose either one.
 For `prod` and `critical`:
 
 - the caller must use `workflow_run` after a successful workflow triggered by a
-  published GitHub Release;
-- the upstream workflow must be `.github/workflows/run_on_release.yaml` in the
-  calling repository;
-- the `workflow_run` caller must run from the repository's protected default
-  branch;
+  published GitHub Release; `prod` also allows a manual `workflow_dispatch`
+  with the release tag passed through the `tag` input;
+- for `workflow_run`, the upstream workflow must be
+  `.github/workflows/run_on_release.yaml` in the calling repository;
+- both automatic and manual callers must run from the repository's protected
+  default branch;
 - the `tag` input must use stable SemVer form such as `v1.2.3` or `1.2.3`;
 - the tag must belong to an existing published, non-draft, non-prerelease GitHub
   Release;
 - the workflow checks out the tag, not the branch head;
-- the tagged commit must match the upstream `workflow_run.head_sha`;
+- for `workflow_run`, the tagged commit must match the upstream
+  `workflow_run.head_sha`; manual runs have no upstream workflow SHA;
 - exactly one production source branch, `main` or `master`, must exist;
 - the tagged commit must be contained in that production source branch;
 - the tagged commit must not predate or diverge from any stable release already
@@ -109,6 +111,14 @@ repository's default branch, which may have any valid name. The reusable
 workflow verifies this relationship but checks the release commit against the
 single existing `main` or `master` branch. If both production branch names exist
 or neither exists, publication stops.
+
+For manual `prod` runs, select the calling repository's default branch in
+**Use workflow from**, and pass the desired stable release tag as the `tag`
+input. The selected branch identifies the trusted caller, not the image source:
+the workflow checks out and validates the tag's commit. An existing published
+stable GitHub Release is still required; a bare tag, draft, or prerelease is not
+accepted. Manual builds from another branch or a tag ref are rejected.
+`critical` continues to require the automatic `workflow_run` path.
 
 For rollback protection, the workflow reads stable SemVer tags from the target
 Harbor repository after the image has been built and scanned, but before it is
