@@ -50,12 +50,42 @@ class ConfigureTests(TemporaryTestCase):
             self.environment(UPSTREAM_REPOSITORY="attacker/application"),
         )
 
-    def test_direct_dispatch_is_rejected(self) -> None:
-        self.assert_workflow_error(
-            "must be started by a workflow_run",
-            configure,
-            self.environment(GITHUB_EVENT_NAME="workflow_dispatch"),
-        )
+    def test_dispatch_from_production_branch_without_upstream_metadata(self) -> None:
+        for target in ("prod", "critical"):
+            for branch in ("main", "master"):
+                with self.subTest(target=target, branch=branch):
+                    outputs = configure(self.environment(
+                        TARGET=target, GITHUB_EVENT_NAME="workflow_dispatch", REF_NAME=branch,
+                        UPSTREAM_EVENT="", UPSTREAM_CONCLUSION="", UPSTREAM_PATH="",
+                        UPSTREAM_REPOSITORY="",
+                    ))
+                    self.assertEqual(outputs["source_ref"], "v1.2.3")
+                    self.assertEqual(outputs["image_tag"], "v1.2.3")
+                    self.assertEqual(outputs["is_release"], "true")
+                    self.assertEqual(outputs["requested_source_branch"], "")
+
+    def test_dispatch_outside_production_branches_is_rejected(self) -> None:
+        for ref_type, ref_name in (
+            ("branch", "develop"), ("branch", "feature/untrusted"),
+            ("tag", "v1.2.3"), ("tag", "main"),
+        ):
+            with self.subTest(ref_type=ref_type, ref_name=ref_name):
+                self.assert_workflow_error(
+                    "workflow_dispatch builds must run from main or master",
+                    configure,
+                    self.environment(
+                        GITHUB_EVENT_NAME="workflow_dispatch", REF_TYPE=ref_type, REF_NAME=ref_name,
+                    ),
+                )
+
+    def test_other_release_triggers_are_rejected(self) -> None:
+        for event in ("push", "release", "repository_dispatch", ""):
+            with self.subTest(event=event):
+                self.assert_workflow_error(
+                    "must be started by workflow_run or workflow_dispatch",
+                    configure,
+                    self.environment(GITHUB_EVENT_NAME=event, REF_NAME="main"),
+                )
 
     def test_failed_upstream_is_rejected(self) -> None:
         self.assert_workflow_error(
@@ -65,11 +95,13 @@ class ConfigureTests(TemporaryTestCase):
         )
 
     def test_non_semver_tag_is_rejected(self) -> None:
-        self.assert_workflow_error(
-            "requires a stable release tag",
-            configure,
-            self.environment(TAG="latest"),
-        )
+        for event, branch in (("workflow_run", "develop"), ("workflow_dispatch", "main")):
+            with self.subTest(event=event):
+                self.assert_workflow_error(
+                    "requires a stable release tag",
+                    configure,
+                    self.environment(TAG="latest", GITHUB_EVENT_NAME=event, REF_NAME=branch),
+                )
 
     def test_run_outside_default_branch_is_rejected(self) -> None:
         self.assert_workflow_error(

@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/k8s-build-push-harbor.yml"
-HELPER_SHA = "da44c96dbb329e563a4912cf07f621a1a8829719"
+HELPER_SHA = "c19bf7880245f2f15d387279236bebb0eb201349"
 HELPER_REFERENCE = "lidofinance/actions/.github/actions/k8s-harbor-helper"
 SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
 
@@ -97,6 +97,14 @@ class WorkflowContractTests(unittest.TestCase):
                 "validate-source",
             },
         )
+
+    def test_source_validation_receives_event_and_upstream_sha(self) -> None:
+        block = re.search(
+            r"(?ms)^      - name: Validate source\n.*?(?=^      - name:)", self.workflow,
+        )
+        self.assertIsNotNone(block)
+        self.assertIn("GITHUB_EVENT_NAME: ${{ github.event_name }}", block.group())
+        self.assertIn("UPSTREAM_SHA: ${{ github.event.workflow_run.head_sha }}", block.group())
 
     def test_harbor_preflight_runs_before_build_without_docker_login(self) -> None:
         for target, token in (("production", "PROD"), ("critical", "CRIT")):

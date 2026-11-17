@@ -30,11 +30,15 @@ def validate_source(
     upstream_sha = environment.get("UPSTREAM_SHA", "")
     source_sha = git_text("rev-parse", "--verify", "HEAD^{commit}", cwd=cwd)
 
-    if is_release and upstream_sha != source_sha:
-        raise WorkflowError(
-            f"Release tag commit {source_sha} does not match upstream workflow_run "
-            f"commit {upstream_sha}"
-        )
+    if is_release:
+        event_name = required(environment, "GITHUB_EVENT_NAME")
+        if event_name not in {"workflow_run", "workflow_dispatch"}:
+            raise WorkflowError(f"Unsupported release event '{event_name}'")
+        if event_name == "workflow_run" and upstream_sha != source_sha:
+            raise WorkflowError(
+                f"Release tag commit {source_sha} does not match upstream workflow_run "
+                f"commit {upstream_sha}"
+            )
 
     source_branch = (
         select_production_branch(cwd=cwd) if is_release else requested_source_branch

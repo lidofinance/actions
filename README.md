@@ -88,29 +88,28 @@ and post-push manifest lookup have been removed.
 
 For `prod` and `critical`:
 
-- the caller must use `workflow_run` after a successful workflow triggered by a
-  published GitHub Release;
-- the upstream workflow must be `.github/workflows/run_on_release.yaml` in the
-  calling repository;
-- the `workflow_run` caller must run from the repository's protected default
-  branch;
+- new callers may use `workflow_dispatch` from the protected `main` or `master`
+  branch, even when the repository's default branch has another name;
+- the legacy `workflow_run` scheme remains supported during migration: the
+  caller must run from the protected default branch after a successful
+  release-triggered `.github/workflows/run_on_release.yaml` in the same repository;
 - the `tag` input must use stable SemVer form such as `v1.2.3` or `1.2.3`;
 - the tag must belong to an existing published, non-draft, non-prerelease GitHub
   Release;
 - the workflow checks out the tag, not the branch head;
-- the tagged commit must match the upstream `workflow_run.head_sha`;
+- for `workflow_run`, the tagged commit must match the upstream `workflow_run.head_sha`;
 - exactly one production source branch, `main` or `master`, must exist;
 - the tagged commit must be contained in that production source branch;
 - the tagged commit must not predate or diverge from any stable release already
   published to the target Harbor repository;
 - the tag and GitHub Release are checked again before the build.
 
-The branch that runs the trusted caller and the branch that contains production
-source are intentionally independent. GitHub starts `workflow_run` from the
-repository's default branch, which may have any valid name. The reusable
-workflow verifies this relationship but checks the release commit against the
-single existing `main` or `master` branch. If both production branch names exist
-or neither exists, publication stops.
+For legacy `workflow_run`, the execution branch is the repository's default
+branch, which may have any valid name. For `workflow_dispatch`, the execution
+branch must be `main` or `master`. In both modes, the image is built from the
+release tag, not the execution branch's HEAD. Dispatch has no upstream run SHA;
+the tag's resolved commit remains subject to all release and ancestry checks.
+If both production branch names exist or neither exists, publication stops.
 
 For rollback protection, the workflow reads stable SemVer tags from the target
 Harbor repository after the image has been built and scanned, but before it is
@@ -350,9 +349,9 @@ remain immutable, and preflight rejects a blind rebuild under the same tag.
   same managed process; do not provision registry credentials manually.
 - Configure each Environment's deployment branch rules. Required reviewers are
   optional; the workflow itself does not require a manual approval.
-- Allow only the repository's protected default branch to deploy through
-  `harbor_prod_release` and `harbor_crit_release`. This may differ from the
-  production source branch.
+- For `harbor_prod_release` and `harbor_crit_release`, allow the protected
+  production branch (`main` or `master`). During migration, also allow the
+  protected default branch for legacy `workflow_run` callers if it differs.
 - Protect both reserved production branch names, `main` and `master`, against
   unauthorized creation, deletion, and force-push. Keep exactly one of them in
   each application repository.
@@ -369,9 +368,17 @@ remain immutable, and preflight rejects a blind rebuild under the same tag.
 
 #### Production or critical release image
 
-Production uses two caller workflows. The first one runs for a published GitHub
-Release and stores its tag as a short-lived artifact without access to Harbor
-credentials.
+New callers can use a `workflow_dispatch` workflow with a required string `tag`
+input, passing it to this reusable workflow with `target: prod` or `critical`.
+Release automation can invoke it with
+`gh workflow run <workflow.yml> --ref main -f tag=<release-tag>` (use `master`
+for repositories with that production branch). The dispatch workflow must also
+exist on the default branch. Manual dispatch is supported too, but the tag must
+still identify an existing published stable GitHub Release.
+
+The following legacy example remains supported during migration. Its first
+workflow runs for a published GitHub Release and stores the tag as a short-lived
+artifact without access to Harbor credentials.
 
 ```yaml
 name: Run_on_release
