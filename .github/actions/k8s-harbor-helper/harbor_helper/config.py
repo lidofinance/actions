@@ -80,35 +80,42 @@ def configure(environment: Mapping[str, str]) -> dict[str, str]:
         repository = required(environment, "GITHUB_REPOSITORY")
         default_branch = environment.get("DEFAULT_BRANCH", "")
 
-        if event_name != "workflow_run":
-            raise WorkflowError(f"{target} builds must be started by a workflow_run")
-        if upstream_event != "release" or upstream_conclusion != "success":
+        if event_name == "workflow_dispatch":
+            if ref_type != "branch" or ref_name not in {"main", "master"}:
+                raise WorkflowError(
+                    f"{target} workflow_dispatch builds must run from main or master"
+                )
+        elif event_name == "workflow_run":
+            if upstream_event != "release" or upstream_conclusion != "success":
+                raise WorkflowError(
+                    f"{target} builds require a successful upstream workflow triggered "
+                    "by a release event"
+                )
+            if upstream_path != ".github/workflows/run_on_release.yaml":
+                raise WorkflowError(
+                    f"Unexpected upstream workflow '{environment.get('UPSTREAM_PATH', '')}'"
+                )
+            if upstream_repository != repository:
+                raise WorkflowError(
+                    f"Upstream workflow belongs to unexpected repository '{upstream_repository}'"
+                )
+            if not default_branch or not validate_branch_name(default_branch):
+                raise WorkflowError(
+                    f"Repository default branch '{default_branch}' is invalid"
+                )
+            if ref_type != "branch" or ref_name != default_branch:
+                raise WorkflowError(
+                    f"{target} builds must run from the repository default branch "
+                    f"'{default_branch}' through workflow_run"
+                )
+        else:
             raise WorkflowError(
-                f"{target} builds require a successful upstream workflow triggered "
-                "by a release event"
-            )
-        if upstream_path != ".github/workflows/run_on_release.yaml":
-            raise WorkflowError(
-                f"Unexpected upstream workflow '{environment.get('UPSTREAM_PATH', '')}'"
-            )
-        if upstream_repository != repository:
-            raise WorkflowError(
-                f"Upstream workflow belongs to unexpected repository '{upstream_repository}'"
+                f"{target} builds must be started by workflow_run or workflow_dispatch"
             )
         if SEMVER_PATTERN.fullmatch(tag) is None:
             raise WorkflowError(
                 f"{target} requires a stable release tag such as v1.2.3 or 1.2.3"
             )
-        if not default_branch or not validate_branch_name(default_branch):
-            raise WorkflowError(
-                f"Repository default branch '{default_branch}' is invalid"
-            )
-        if ref_type != "branch" or ref_name != default_branch:
-            raise WorkflowError(
-                f"{target} builds must run from the repository default branch "
-                f"'{default_branch}' through workflow_run"
-            )
-
         image_tag = tag
         requested_source_branch = ""
         source_ref = tag
