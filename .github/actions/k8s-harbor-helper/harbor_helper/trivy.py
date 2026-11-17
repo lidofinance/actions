@@ -113,20 +113,15 @@ def summarize_trivy(environment: Mapping[str, str]) -> dict[str, str]:
         summary.write("|----------|------:|\n")
         for severity in severities:
             summary.write(f"| {severity} | {counts[severity]} |\n")
-        mode = "report-only" if report_only or target == "dev" else "blocking HIGH/CRITICAL"
+        mode = "report-only" if report_only or target == "dev" else "blocking CRITICAL only"
         summary.write(f"\nTarget: `{target}`; policy: {mode}.\n")
 
-    if counts["HIGH"] == 0 and counts["CRITICAL"] == 0:
-        print("No HIGH or CRITICAL vulnerabilities found after VEX filtering")
+    if not vulnerabilities:
+        print("No vulnerabilities found after VEX filtering")
         return {}
 
-    print("HIGH and CRITICAL vulnerabilities:")
-    blocking_entries = [
-        (scan_target, vulnerability)
-        for scan_target, vulnerability in vulnerabilities
-        if vulnerability.get("Severity") in {"HIGH", "CRITICAL"}
-    ]
-    for scan_target, vulnerability in blocking_entries[:50]:
+    print("Vulnerabilities remaining after VEX filtering (first 50):")
+    for scan_target, vulnerability in vulnerabilities[:50]:
         fields = (
             scan_target,
             vulnerability.get("Severity", ""),
@@ -137,12 +132,15 @@ def summarize_trivy(environment: Mapping[str, str]) -> dict[str, str]:
         )
         print("\t".join(_single_line(str(field)) for field in fields))
     message = (
-        f"Trivy found {counts['HIGH']} HIGH and {counts['CRITICAL']} CRITICAL "
-        "vulnerabilities after VEX filtering"
+        "Trivy found " + ", ".join(
+            f"{counts[severity]} {severity}"
+            for severity in reversed(severities) if counts[severity]
+        ) + " vulnerabilities after VEX filtering"
     )
-    if target != "dev" and not report_only:
+    if target != "dev" and not report_only and counts["CRITICAL"]:
         raise WorkflowError(f"{message}; publication to {target} is blocked")
-    print(f"::warning::{message}; {target} scanning is report-only")
+    policy = "report-only" if report_only or target == "dev" else "only CRITICAL findings block publication"
+    print(f"::warning::{message}; {target} scanning: {policy}")
     return {}
 
 
