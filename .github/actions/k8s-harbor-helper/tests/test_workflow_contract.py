@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/k8s-build-push-harbor.yml"
-HELPER_SHA = "f3163d72774f0aaaae90aeec0c49b72720b1451c"
+HELPER_SHA = "da44c96dbb329e563a4912cf07f621a1a8829719"
 HELPER_REFERENCE = "lidofinance/actions/.github/actions/k8s-harbor-helper"
 SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
 
@@ -40,7 +40,7 @@ class WorkflowContractTests(unittest.TestCase):
         references = re.findall(
             rf"uses: {re.escape(HELPER_REFERENCE)}@([0-9a-f]{{40}})", self.workflow
         )
-        self.assertEqual(len(references), 15)
+        self.assertEqual(len(references), 14)
         self.assertEqual(set(references), {HELPER_SHA})
 
     def test_concurrency_is_scoped_to_image_and_queues_all_runs(self) -> None:
@@ -91,7 +91,6 @@ class WorkflowContractTests(unittest.TestCase):
                 "prepare-context",
                 "prepare-dhi-policy",
                 "prepare-trivy",
-                "resolve-image-digest",
                 "revalidate-release",
                 "summarize-trivy",
                 "validate-release",
@@ -154,10 +153,17 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(gate)
         self.assertIn("TARGET: ${{ inputs.target }}", gate.group())
-        self.assertIn("continue-on-error: true", gate.group())
-        self.assertIn('TRIVY_REPORT_ONLY: "true"', gate.group())
+        self.assertNotIn("continue-on-error:", gate.group())
+        self.assertIn("TRIVY_REPORT_ONLY: ${{ inputs.target == 'dev' }}", gate.group())
         self.assertIn("TRIVY_SCAN_OUTCOME: ${{ steps.trivy-scan.outcome }}", gate.group())
         self.assertNotIn("if:", gate.group())
+
+    def test_push_returns_image_ref_without_post_push_digest_lookup(self) -> None:
+        self.assertNotIn("image_digest", self.workflow)
+        self.assertNotIn("command: resolve-image-digest", self.workflow)
+        self.assertIn("      - name: Push Docker image\n        id: push", self.workflow)
+        self.assertIn('docker push "$remote_ref"\n          echo "image_ref=${remote_ref}" >> "$GITHUB_OUTPUT"', self.workflow)
+        self.assertIn("image_ref: ${{ steps.push.outputs.image_ref }}", self.workflow)
 
     def test_python_runtime_is_pinned(self) -> None:
         self.assertEqual(
@@ -254,13 +260,16 @@ class WorkflowContractTests(unittest.TestCase):
             "Prepare trusted Trivy VEX configuration",
             "Scan Docker image with Trivy",
             "Upload Trivy vulnerability report",
-            "Summarize vulnerability report (report-only)",
         }
         actual = set()
         for block in re.split(r"(?m)^      - name: ", self.workflow)[1:]:
             if "continue-on-error:" in block:
-                self.assertIn("continue-on-error: true", block)
-                actual.add(block.splitlines()[0])
+                name = block.splitlines()[0]
+                if name in {"Prepare trusted Trivy VEX configuration", "Scan Docker image with Trivy"}:
+                    self.assertIn("continue-on-error: ${{ inputs.target == 'dev' }}", block)
+                else:
+                    self.assertIn("continue-on-error: true", block)
+                actual.add(name)
         self.assertEqual(actual, advisory)
         self.assertNotIn("\n    continue-on-error:", self.workflow)
 

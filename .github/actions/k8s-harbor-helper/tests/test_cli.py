@@ -120,7 +120,7 @@ class CliTests(unittest.TestCase):
         report.write_text(json.dumps({
             "Results": [{
                 "Vulnerabilities": [
-                    {"Severity": "HIGH", "VulnerabilityID": "CVE-HIGH"},
+                    {"Severity": "CRITICAL", "VulnerabilityID": "CVE-CRITICAL"},
                 ],
             }],
         }))
@@ -135,7 +135,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("::error::Trivy found", result.stdout)
         self.assertIn("publication to prod is blocked", result.stdout)
-        self.assertIn("| HIGH | 1 |", summary.read_text())
+        self.assertIn("| CRITICAL | 1 |", summary.read_text())
 
     def test_report_only_cli_allows_findings_and_scan_failure(self) -> None:
         report = self.root / "trivy.json"

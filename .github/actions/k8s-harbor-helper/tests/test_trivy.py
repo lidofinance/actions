@@ -101,25 +101,30 @@ class TrivyTests(TemporaryTestCase):
             self.environment("prod") | {"TRIVY_REPORT_ONLY": "invalid"},
         )
 
-    def test_high_and_critical_block_all_non_dev_targets_without_a_fix(self) -> None:
+    def test_critical_blocks_all_non_dev_targets_without_a_fix(self) -> None:
         for target in ("staging", "prod", "critical"):
-            for severity in ("HIGH", "CRITICAL"):
-                with self.subTest(target=target, severity=severity):
-                    self.write_report(severity)
-                    original = self.report.read_text()
-                    self.assert_workflow_error(
-                        f"publication to {target} is blocked",
-                        summarize_trivy,
-                        self.environment(target),
-                    )
-                    self.assertIn(f"| {severity} | 1 |", self.summary.read_text())
-                    self.assertEqual(self.report.read_text(), original)
+            with self.subTest(target=target):
+                self.summary.unlink(missing_ok=True)
+                self.write_report("CRITICAL")
+                original = self.report.read_text()
+                self.assert_workflow_error(
+                    f"publication to {target} is blocked",
+                    summarize_trivy,
+                    self.environment(target),
+                )
+                self.assertIn("| CRITICAL | 1 |", self.summary.read_text())
+                self.assertEqual(self.report.read_text(), original)
 
     def test_lower_severities_do_not_block_any_target(self) -> None:
-        self.write_report("UNKNOWN", "LOW", "MEDIUM")
+        self.write_report("UNKNOWN", "LOW", "MEDIUM", "HIGH")
         for target in ("dev", "staging", "prod", "critical"):
-            with self.subTest(target=target):
+            with self.subTest(target=target), mock.patch("builtins.print") as output:
+                self.summary.unlink(missing_ok=True)
                 summarize_trivy(self.environment(target))
+                warning = " ".join(str(call) for call in output.call_args_list if "::warning::" in str(call))
+                for severity in ("UNKNOWN", "LOW", "MEDIUM", "HIGH"):
+                    self.assertIn(severity, warning)
+                    self.assertIn(f"| {severity} | 1 |", self.summary.read_text())
 
     def test_vex_suppressed_findings_do_not_block_publication(self) -> None:
         self.report.write_text(json.dumps({
