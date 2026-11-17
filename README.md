@@ -80,7 +80,10 @@ fixed token name for the requested target; the caller cannot choose either one.
 | Name | Description |
 |------|-------------|
 | `image_ref` | Published image reference, including its tag |
-| `image_digest` | Published `sha256` image digest |
+
+`image_ref` is set only after a successful push. The workflow does not query the
+registry manifest after publication. The unused `image_digest` output and its
+post-push lookup have been removed; callers must not depend on that output.
 
 #### Source selection and validation
 
@@ -288,34 +291,40 @@ remains disabled until that repository has a valid Trivy VEX index. To enable
 it later, change `enabled` in this central configuration and update the helper
 SHA. DHI exception downloads from that repository are independent of this flag.
 
-Trivy is temporarily report-only for every target. Findings remaining after VEX
-filtering are reported as follows:
+The target determines the policy for findings remaining after VEX filtering:
 
-| Target | HIGH or CRITICAL findings |
-| --- | --- |
-| `dev`, `staging`, `prod`, `critical` | Warning; publication continues. |
+| Target | CRITICAL findings | HIGH and lower findings | Failed or unavailable scan |
+| --- | --- | --- | --- |
+| `dev` | Warning and report | Warning and report | Warning; summary marked unavailable |
+| `staging`, `prod`, `critical` | Publication blocked | Warning and report | Publication blocked |
 
-Allowing HIGH/CRITICAL findings through CI is a temporary rollout exception,
-not the intended permanent publication policy.
+Findings without an available fix are also reported. The helper evaluates the
+local JSON report and writes the summary before artifact upload. VEX-suppressed
+findings are retained separately through `--show-suppressed` and excluded from
+the active severity counts.
 
-Findings without an available fix are also reported. The JSON report is uploaded
-before summarizing. VEX-suppressed findings are retained separately through
-`--show-suppressed` and excluded from the active severity counts.
+The Python helper's `scan-trivy` command prepares the trusted VEX configuration,
+exports the image, runs Trivy, and writes the summary. It handles scan errors
+and findings according to the target policy; the scan step does not use
+`continue-on-error`. An unsuccessful scan or invalid/missing report is shown as
+**unavailable**, without inventing zero findings. Outside dev this blocks
+publication, including failures to download the trusted VEX repositories.
+There is no global report-only override or empty-VEX fallback presented as a
+valid scan. Each Docker command has a 15-minute timeout.
 
-Preparation, scanning, report upload, and summary steps use
-`continue-on-error: true`. A failed/skipped scan or invalid/missing report is
-shown as **unavailable** in the summary, without inventing zero findings;
-publication continues. There is no empty-VEX fallback presented as a valid scan.
-The workflow sets `TRIVY_REPORT_ONLY=true`; the helper's strict mode remains
-available for future enforcement. The CI scan does not apply Harbor CVE
-allowlists. The official Trivy `v0.76.2` container is pinned by digest; the Harbor
-scanner is not upgraded by this change.
+The JSON artifact upload runs after the Python step, including when it fails,
+unless the workflow was cancelled. It is for diagnostics; policy evaluation
+uses the local report, not the uploaded artifact. Upload failures remain
+warnings and are the only Trivy step using `continue-on-error`.
+The CI scan does not apply Harbor CVE allowlists. The official Trivy `v0.76.2`
+container is pinned by digest; the Harbor scanner is not upgraded by this change.
 
 Harbor policy is unchanged: CRITICAL vulnerabilities block image pulls in
 staging, production, and critical; dev scans images without this pull block.
-This is a pull-time control, not a CI push gate: a successful CI push does not
-mean a vulnerable image can be deployed. HIGH findings do not imply the same
-Harbor block under this CRITICAL-only policy.
+This is an independent pull-time control: a successful CI push does not mean
+Harbor will allow the image to be deployed, as scan results and VEX handling may
+differ. HIGH findings do not imply the same Harbor block under this
+CRITICAL-only policy.
 
 Source validation, build failures, Harbor login, anti-rollback, and push remain
 fatal.
@@ -334,11 +343,11 @@ selected production source branch. Restore missing Git tags only from verified
 release records. If history cannot be verified, coordinate a migration decision
 with SecOps; the workflow does not silently ignore legacy tags.
 
-After push, digest lookup makes at most three attempts, with 2- and 4-second
-delays and a 30-second timeout per attempt. If all attempts fail, the error
-explicitly states that push succeeded but digest lookup failed. Inspect the
-existing image and original push logs before rerunning: stable tags remain
-immutable, and preflight rejects a blind rebuild under the same tag.
+The workflow ends publication after a successful push and returns `image_ref`;
+there is no post-push manifest lookup that could fail on Harbor pull policy.
+If a run fails after publication, inspect the existing image and original push
+logs before rerunning: stable tags remain immutable, and preflight rejects a
+blind rebuild under the same tag.
 
 #### Required repository and Harbor configuration
 

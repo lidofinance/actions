@@ -29,9 +29,6 @@ on:
       image_ref:
         description: Published image reference with tag
         value: ${{ jobs.publish.outputs.image_ref }}
-      image_digest:
-        description: Published image digest
-        value: ${{ jobs.publish.outputs.image_digest }}
 
 permissions:
   contents: read
@@ -61,7 +58,7 @@ jobs:
 
       - name: Configure target and validate inputs
         id: config
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: configure
         env:
@@ -91,7 +88,7 @@ jobs:
 
       - name: Validate source
         id: source
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: validate-source
         env:
@@ -102,7 +99,7 @@ jobs:
 
       - name: Validate published GitHub Release
         if: ${{ steps.config.outputs.is_release == 'true' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: validate-release
         env:
@@ -118,7 +115,6 @@ jobs:
     environment: ${{ needs.validate.outputs.github_environment }}
     outputs:
       image_ref: ${{ steps.push.outputs.image_ref }}
-      image_digest: ${{ steps.push.outputs.image_digest }}
 
     steps:
       - name: Set up Python
@@ -136,7 +132,7 @@ jobs:
 
       - name: Revalidate release source
         if: ${{ needs.validate.outputs.is_release == 'true' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: revalidate-release
         env:
@@ -149,7 +145,7 @@ jobs:
 
       - name: Preflight production Harbor release
         if: ${{ needs.validate.outputs.is_release == 'true' && inputs.target == 'prod' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: check-rollback
         env:
@@ -162,7 +158,7 @@ jobs:
 
       - name: Preflight critical Harbor release
         if: ${{ needs.validate.outputs.is_release == 'true' && inputs.target == 'critical' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: check-rollback
         env:
@@ -175,7 +171,7 @@ jobs:
 
       - name: Prepare isolated build context
         id: context
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: prepare-context
         env:
@@ -186,7 +182,7 @@ jobs:
       - name: Download trusted DHI exceptions
         id: dhi-policy
         continue-on-error: true
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: prepare-dhi-policy
         env:
@@ -204,7 +200,7 @@ jobs:
 
       - name: Check DHI base images and approved exceptions
         continue-on-error: true
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: check-dhi
         env:
@@ -216,7 +212,7 @@ jobs:
           BUILD_COMMIT: ${{ needs.validate.outputs.source_sha }}
 
       - name: Populate build-info.json
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: populate-build-info
         env:
@@ -258,54 +254,19 @@ jobs:
           # cache-from: type=gha,scope=${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
           # cache-to: type=gha,mode=max,scope=${{ github.repository_id }}-${{ inputs.target }}-${{ inputs.harbor_project }}-${{ inputs.image }}
 
-      - name: Prepare trusted Trivy VEX configuration
-        id: trivy-config
-        continue-on-error: true
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
-        with:
-          command: prepare-trivy
-
-      - name: Scan Docker image with Trivy
+      - name: Scan Docker image with Trivy and enforce policy
         id: trivy-scan
-        if: ${{ steps.trivy-config.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
+        with:
+          command: scan-trivy
         env:
+          TARGET: ${{ inputs.target }}
+          RUNNER_TEMP: ${{ runner.temp }}
           IMAGE_REF: local-build:${{ github.run_id }}-${{ github.run_attempt }}
           TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb  # v0.76.2
-          VEX_CONFIG: ${{ steps.trivy-config.outputs.vex_config }}
-        run: |
-          set -euo pipefail
-
-          trivy_dir="$RUNNER_TEMP/trivy"
-          mkdir -p "$trivy_dir/cache" "$trivy_dir/reports"
-          docker save --output "$trivy_dir/image.tar" "$IMAGE_REF"
-
-          trivy_args=(
-            --rm
-            --volume "$trivy_dir/cache:/cache"
-            --volume "$trivy_dir/reports:/reports"
-            --volume "$VEX_CONFIG:/root/.trivy/vex/repository.yaml:ro"
-            --env TRIVY_CACHE_DIR=/cache
-          )
-
-          docker run "${trivy_args[@]}" "$TRIVY_IMAGE" vex repo download
-
-          docker run "${trivy_args[@]}" \
-            --volume "$trivy_dir/image.tar:/input/image.tar:ro" \
-            "$TRIVY_IMAGE" image \
-            --input /input/image.tar \
-            --vex repo \
-            --skip-vex-repo-update \
-            --show-suppressed \
-            --format json \
-            --output /reports/trivy-report.json \
-            --exit-code 0 \
-            --pkg-types os,library \
-            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
-            --scanners vuln
 
       - name: Upload Trivy vulnerability report
+        if: ${{ !cancelled() && (steps.trivy-scan.outcome == 'success' || steps.trivy-scan.outcome == 'failure') }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -313,17 +274,6 @@ jobs:
           path: ${{ runner.temp }}/trivy/reports/trivy-report.json
           if-no-files-found: warn
           retention-days: 30
-
-      - name: Summarize vulnerability report (report-only)
-        continue-on-error: true
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
-        with:
-          command: summarize-trivy
-        env:
-          TARGET: ${{ inputs.target }}
-          TRIVY_REPORT_ONLY: "true"
-          TRIVY_SCAN_OUTCOME: ${{ steps.trivy-scan.outcome }}
-          TRIVY_REPORT: ${{ runner.temp }}/trivy/reports/trivy-report.json
 
       - name: Login to development Harbor
         if: ${{ inputs.target == 'dev' }}
@@ -359,7 +309,7 @@ jobs:
 
       - name: Prevent production release rollback
         if: ${{ needs.validate.outputs.is_release == 'true' && inputs.target == 'prod' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: check-rollback
         env:
@@ -372,7 +322,7 @@ jobs:
 
       - name: Prevent critical release rollback
         if: ${{ needs.validate.outputs.is_release == 'true' && inputs.target == 'critical' }}
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
+        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@e0409eb48ea98b57f6c7648494d99d1992267a15
         with:
           command: check-rollback
         env:
@@ -384,6 +334,7 @@ jobs:
           SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
 
       - name: Push Docker image
+        id: push
         shell: bash
         env:
           IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
@@ -395,11 +346,4 @@ jobs:
           remote_ref="${REMOTE_NAME}:${IMAGE_TAG}"
           docker tag "$LOCAL_IMAGE" "$remote_ref"
           docker push "$remote_ref"
-
-      - name: Resolve published image digest
-        id: push
-        uses: lidofinance/actions/.github/actions/k8s-harbor-helper@f3163d72774f0aaaae90aeec0c49b72720b1451c
-        with:
-          command: resolve-image-digest
-        env:
-          REMOTE_REF: ${{ needs.validate.outputs.remote_name }}:${{ needs.validate.outputs.image_tag }}
+          echo "image_ref=${remote_ref}" >> "$GITHUB_OUTPUT"

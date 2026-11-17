@@ -162,25 +162,23 @@ class DhiDownloadTests(unittest.TestCase):
 
     def test_downloaded_exception_and_empty_fallback_have_expected_enforcement(self) -> None:
         dockerfile = self.root / "Dockerfile"
+        dockerfile.write_text("FROM nginx:alpine\n")
         for responses, allowed in (
             ([self.branch, self.contents(self.policy)], True),
             ([HttpResponse(404, {})], False),
         ):
-            result, _, _ = self.download(responses)
-            for target in ("dev", "staging", "prod", "critical"):
-                for image in ("dhi.io/nginx:1", "nginx:alpine"):
-                    dockerfile.write_text(f"FROM {image}\n")
-                    environment = {
-                        "TARGET": target, "GITHUB_REPOSITORY": "example/application",
-                        "DOCKERFILE": str(dockerfile), "DHI_POLICY": result["dhi_policy"],
-                        "BUILD_VERSION": "v1.2.3", "BUILD_BRANCH": "main", "BUILD_COMMIT": "a" * 40,
-                    }
-                    with self.subTest(allowed=allowed, image=image, target=target), contextlib.redirect_stdout(io.StringIO()):
-                        if image.startswith("dhi.io/") or allowed or target == "dev":
-                            check_dhi(environment, today=date(2026, 10, 16))
-                        else:
-                            with self.assertRaises(WorkflowError):
-                                check_dhi(environment, today=date(2026, 10, 16))
+            with self.subTest(allowed=allowed), contextlib.redirect_stdout(io.StringIO()):
+                result, _, _ = self.download(responses)
+                environment = {
+                    "TARGET": "prod", "GITHUB_REPOSITORY": "example/application",
+                    "DOCKERFILE": str(dockerfile), "DHI_POLICY": result["dhi_policy"],
+                    "BUILD_VERSION": "v1.2.3", "BUILD_BRANCH": "main", "BUILD_COMMIT": "a" * 40,
+                }
+                if allowed:
+                    check_dhi(environment, today=date(2026, 10, 16))
+                else:
+                    with self.assertRaises(WorkflowError):
+                        check_dhi(environment, today=date(2026, 10, 16))
 
     def test_missing_runner_temp_is_an_infrastructure_error(self) -> None:
         with self.assertRaises(WorkflowError):

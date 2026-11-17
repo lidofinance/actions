@@ -28,12 +28,6 @@ outputs:
   github_environment:
     description: Trusted GitHub Environment for the target
     value: ${{ steps.helper.outputs.github_environment }}
-  image_digest:
-    description: Published image digest
-    value: ${{ steps.helper.outputs.image_digest }}
-  image_ref:
-    description: Published image reference
-    value: ${{ steps.helper.outputs.image_ref }}
   image_tag:
     description: Image tag selected for the target
     value: ${{ steps.helper.outputs.image_tag }}
@@ -55,9 +49,6 @@ outputs:
   source_sha:
     description: Validated source commit
     value: ${{ steps.helper.outputs.source_sha }}
-  vex_config:
-    description: Trusted VEX repository configuration from the pinned helper
-    value: ${{ steps.helper.outputs.vex_config }}
 
 runs:
   using: composite

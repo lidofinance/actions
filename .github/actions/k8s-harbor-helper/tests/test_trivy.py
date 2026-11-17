@@ -43,83 +43,59 @@ class TrivyTests(TemporaryTestCase):
             )
         )
 
-    def test_dev_high_without_critical_is_warning_only(self) -> None:
-        self.write_report("HIGH")
-        with mock.patch("builtins.print") as print_mock:
-            summarize_trivy(self.environment())
-        self.assertTrue(any(
-            "::warning::" in str(call) for call in print_mock.call_args_list
-        ))
-
-    def test_report_only_allows_high_and_critical_for_every_target(self) -> None:
-        self.write_report("HIGH", "CRITICAL")
-        for target in ("dev", "staging", "prod", "critical"):
-            self.summary.unlink(missing_ok=True)
-            with self.subTest(target=target), mock.patch("builtins.print") as output:
-                summarize_trivy(self.environment(target) | {"TRIVY_REPORT_ONLY": "true"})
-                self.assertTrue(any("::warning::" in str(call) for call in output.call_args_list))
-                self.assertIn("| HIGH | 1 |", self.summary.read_text())
-                self.assertIn("| CRITICAL | 1 |", self.summary.read_text())
-                self.assertIn("policy: report-only", self.summary.read_text())
-                self.assertNotIn("blocking HIGH/CRITICAL", self.summary.read_text())
-
-    def test_report_only_marks_missing_and_invalid_reports_as_unavailable(self) -> None:
+    def test_dev_marks_missing_and_invalid_reports_as_unavailable(self) -> None:
         for content in (None, "invalid JSON", "{}", '{"Results": null}', '{"Results": [null]}'):
             self.report.unlink(missing_ok=True)
             self.summary.unlink(missing_ok=True)
             if content is not None:
                 self.report.write_text(content)
             with self.subTest(content=content), mock.patch("builtins.print") as output:
-                summarize_trivy(self.environment("prod") | {"TRIVY_REPORT_ONLY": "true"})
+                summarize_trivy(self.environment("dev"))
                 self.assertIn("Status: **unavailable**", self.summary.read_text())
                 self.assertNotIn("| HIGH |", self.summary.read_text())
                 self.assertTrue(any("::warning::" in str(call) for call in output.call_args_list))
                 self.assertFalse(any("No HIGH" in str(call) for call in output.call_args_list))
 
-    def test_failed_scan_does_not_trust_a_partial_or_stale_clean_report(self) -> None:
-        self.write_report()
-        for outcome in ("failure", "skipped", "cancelled", ""):
-            self.summary.unlink(missing_ok=True)
-            with self.subTest(outcome=outcome), mock.patch("builtins.print"):
-                summarize_trivy(self.environment("prod") | {
-                    "TRIVY_REPORT_ONLY": "true", "TRIVY_SCAN_OUTCOME": outcome,
-                })
-                self.assertIn("Status: **unavailable**", self.summary.read_text())
-                self.assertNotIn("| HIGH |", self.summary.read_text())
+    def test_critical_blocks_all_non_dev_targets_without_a_fix(self) -> None:
+        for target in ("staging", "prod", "critical"):
+            with self.subTest(target=target):
+                self.summary.unlink(missing_ok=True)
+                self.write_report("HIGH", "CRITICAL")
+                original = self.report.read_text()
+                self.assert_workflow_error(
+                    f"publication to {target} is blocked",
+                    summarize_trivy,
+                    self.environment(target),
+                )
+                self.assertIn("| CRITICAL | 1 |", self.summary.read_text())
+                self.assertIn("policy: blocking CRITICAL only", self.summary.read_text())
+                self.assertEqual(self.report.read_text(), original)
 
-    def test_report_only_clean_scan_still_produces_a_summary(self) -> None:
-        self.write_report("LOW")
-        summarize_trivy(self.environment("prod") | {
-            "TRIVY_REPORT_ONLY": "true", "TRIVY_SCAN_OUTCOME": "success",
-        })
-        self.assertIn("| LOW | 1 |", self.summary.read_text())
-        self.assertIn("policy: report-only", self.summary.read_text())
-
-    def test_report_only_flag_requires_an_explicit_boolean(self) -> None:
+    def test_legacy_report_only_flag_cannot_bypass_critical_policy(self) -> None:
+        self.write_report("CRITICAL")
         self.assert_workflow_error(
-            "TRIVY_REPORT_ONLY must be", summarize_trivy,
-            self.environment("prod") | {"TRIVY_REPORT_ONLY": "invalid"},
+            "publication to prod is blocked", summarize_trivy,
+            self.environment("prod") | {"TRIVY_REPORT_ONLY": "true"},
         )
 
-    def test_high_and_critical_block_all_non_dev_targets_without_a_fix(self) -> None:
-        for target in ("staging", "prod", "critical"):
-            for severity in ("HIGH", "CRITICAL"):
-                with self.subTest(target=target, severity=severity):
-                    self.write_report(severity)
-                    original = self.report.read_text()
-                    self.assert_workflow_error(
-                        f"publication to {target} is blocked",
-                        summarize_trivy,
-                        self.environment(target),
-                    )
-                    self.assertIn(f"| {severity} | 1 |", self.summary.read_text())
-                    self.assertEqual(self.report.read_text(), original)
-
     def test_lower_severities_do_not_block_any_target(self) -> None:
-        self.write_report("UNKNOWN", "LOW", "MEDIUM")
+        self.write_report("UNKNOWN", "LOW", "MEDIUM", "HIGH")
         for target in ("dev", "staging", "prod", "critical"):
-            with self.subTest(target=target):
+            with self.subTest(target=target), mock.patch("builtins.print") as output:
+                self.summary.unlink(missing_ok=True)
                 summarize_trivy(self.environment(target))
+                self.assertTrue(any("::warning::" in str(call) for call in output.call_args_list))
+                for severity in ("UNKNOWN", "LOW", "MEDIUM", "HIGH"):
+                    self.assertIn(f"| {severity} | 1 |", self.summary.read_text())
+
+    def test_clean_scan_has_no_warning(self) -> None:
+        self.write_report()
+        for target in ("dev", "staging", "prod", "critical"):
+            with self.subTest(target=target), mock.patch("builtins.print") as output:
+                self.summary.unlink(missing_ok=True)
+                summarize_trivy(self.environment(target))
+                self.assertIn("| CRITICAL | 0 |", self.summary.read_text())
+                self.assertFalse(any("::warning::" in str(call) for call in output.call_args_list))
 
     def test_vex_suppressed_findings_do_not_block_publication(self) -> None:
         self.report.write_text(json.dumps({
@@ -154,6 +130,7 @@ class TrivyTests(TemporaryTestCase):
         }))
         for target in ("dev", "staging", "prod", "critical"):
             with self.subTest(target=target):
+                self.summary.unlink(missing_ok=True)
                 summarize_trivy(self.environment(target))
                 self.assertIn("| HIGH | 0 |", self.summary.read_text())
                 self.assertIn("| CRITICAL | 0 |", self.summary.read_text())
@@ -172,6 +149,7 @@ class TrivyTests(TemporaryTestCase):
             ("Metadata", None), ("Metadata", []),
         ):
             with self.subTest(field=field, value=value):
+                self.summary.unlink(missing_ok=True)
                 self.report.write_text(json.dumps(valid | {field: value}))
                 self.assert_workflow_error(
                     "valid vulnerability report",
@@ -210,18 +188,20 @@ class TrivyTests(TemporaryTestCase):
             '{"Results": [{"Vulnerabilities": [{"Severity": {}}]}]}',
         ):
             with self.subTest(report=report):
+                self.summary.unlink(missing_ok=True)
                 self.report.write_text(report)
                 self.assert_workflow_error(
                     "valid vulnerability report",
                     summarize_trivy,
-                    self.environment(),
+                    self.environment("prod"),
                 )
+                self.assertIn("Status: **unavailable**", self.summary.read_text())
 
     def test_missing_report_is_rejected(self) -> None:
         self.assert_workflow_error(
             "valid vulnerability report",
             summarize_trivy,
-            self.environment(),
+            self.environment("prod"),
         )
 
     def test_vex_config_comes_from_the_helper_checkout(self) -> None:

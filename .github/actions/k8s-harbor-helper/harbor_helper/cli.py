@@ -8,7 +8,6 @@ from typing import Sequence
 from harbor_helper.build import (
     populate_build_info,
     prepare_context,
-    resolve_image_digest,
 )
 from harbor_helper.common import WorkflowError, escape_workflow_command, write_outputs
 from harbor_helper.config import configure
@@ -20,7 +19,7 @@ from harbor_helper.release import (
     validate_published_release,
     validate_source,
 )
-from harbor_helper.trivy import prepare_trivy, summarize_trivy
+from harbor_helper.trivy import scan_trivy
 
 
 COMMANDS = {
@@ -30,10 +29,8 @@ COMMANDS = {
     "populate-build-info": populate_build_info,
     "prepare-context": prepare_context,
     "prepare-dhi-policy": prepare_dhi_policy,
-    "prepare-trivy": prepare_trivy,
-    "resolve-image-digest": resolve_image_digest,
     "revalidate-release": revalidate_release,
-    "summarize-trivy": summarize_trivy,
+    "scan-trivy": scan_trivy,
     "validate-release": validate_published_release,
     "validate-source": validate_source,
 }
