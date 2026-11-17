@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Mapping
 
@@ -13,6 +14,61 @@ def prepare_trivy(environment: Mapping[str, str]) -> dict[str, str]:
     if not config.is_file():
         raise WorkflowError("The trusted Trivy VEX repository configuration is missing")
     return {"vex_config": str(config)}
+
+
+def _docker(stage: str, *arguments: str) -> None:
+    print(f"Trivy: {stage}", flush=True)
+    try:
+        subprocess.run(["docker", *arguments], check=True, timeout=900)
+    except subprocess.CalledProcessError as error:
+        raise WorkflowError(
+            f"{stage}: docker {arguments[0]} failed with exit code {error.returncode}"
+        ) from error
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise WorkflowError(f"{stage}: could not run docker {arguments[0]}: {error}") from error
+
+
+def scan_trivy(environment: Mapping[str, str]) -> dict[str, str]:
+    target = required(environment, "TARGET")
+    if target not in TARGETS:
+        raise WorkflowError(f"Unknown vulnerability scan target '{target}'")
+    try:
+        runner_temp = Path(required(environment, "RUNNER_TEMP")).resolve(strict=True)
+        if runner_temp == Path(runner_temp.anchor):
+            raise WorkflowError("RUNNER_TEMP must not be the filesystem root")
+        trivy_dir = runner_temp / "trivy"
+        cache = trivy_dir / "cache"
+        reports = trivy_dir / "reports"
+        cache.mkdir(parents=True, exist_ok=True)
+        reports.mkdir(parents=True, exist_ok=True)
+        report = reports / "trivy-report.json"
+        report.unlink(missing_ok=True)
+        vex_config = prepare_trivy(environment)["vex_config"]
+        image_ref = required(environment, "IMAGE_REF")
+        trivy_image = required(environment, "TRIVY_IMAGE")
+        archive = trivy_dir / "image.tar"
+
+        _docker("export image", "save", "--output", str(archive), image_ref)
+        arguments = (
+            "run", "--rm",
+            "--volume", f"{cache}:/cache",
+            "--volume", f"{reports}:/reports",
+            "--volume", f"{vex_config}:/root/.trivy/vex/repository.yaml:ro",
+            "--env", "TRIVY_CACHE_DIR=/cache",
+        )
+        _docker("download VEX", *arguments, trivy_image, "vex", "repo", "download")
+        _docker(
+            "scan image", *arguments, "--volume", f"{archive}:/input/image.tar:ro",
+            trivy_image, "image", "--input", "/input/image.tar",
+            "--vex", "repo", "--skip-vex-repo-update", "--show-suppressed",
+            "--format", "json", "--output", "/reports/trivy-report.json",
+            "--exit-code", "0", "--pkg-types", "os,library",
+            "--severity", "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL", "--scanners", "vuln",
+        )
+    except (WorkflowError, OSError) as error:
+        return _scan_unavailable(environment, str(error))
+    # Evaluate findings outside the scan-error handler: CRITICAL is not a failed scan.
+    return summarize_trivy(dict(environment, TRIVY_REPORT=str(report)))
 
 
 def _read_vulnerabilities(report_path: Path) -> list[tuple[str, dict[str, object]]]:
@@ -63,6 +119,7 @@ def _read_vulnerabilities(report_path: Path) -> list[tuple[str, dict[str, object
 
 
 def _scan_unavailable(environment: Mapping[str, str], reason: str) -> dict[str, str]:
+    target = required(environment, "TARGET")
     message = (
         f"Trivy scan is unavailable: {_single_line(reason)}; "
         "no vulnerability assessment was produced"
@@ -71,31 +128,26 @@ def _scan_unavailable(environment: Mapping[str, str], reason: str) -> dict[str, 
         summary.write(
             "### Trivy vulnerability scan\n\n"
             "Status: **unavailable**. No vulnerability assessment was produced.\n\n"
-            "Publication continues under the temporary report-only policy. "
-            "See the scan step logs for details.\n"
         )
-    print(f"::warning::{escape_workflow_command(message)}; publication is report-only")
-    return {}
+        if target == "dev":
+            summary.write("Publication continues under the dev report-only policy.\n")
+        else:
+            summary.write(f"Publication to `{target}` is blocked.\n")
+        summary.write("See the scan step logs for details.\n")
+    if target == "dev":
+        print(f"::warning::{escape_workflow_command(message)}; dev scanning is report-only")
+        return {}
+    raise WorkflowError(f"{message}; publication to {target} is blocked")
 
 
 def summarize_trivy(environment: Mapping[str, str]) -> dict[str, str]:
     target = required(environment, "TARGET")
     if target not in TARGETS:
         raise WorkflowError(f"Unknown vulnerability scan target '{target}'")
-    report_only_value = environment.get("TRIVY_REPORT_ONLY", "false")
-    if report_only_value not in {"true", "false"}:
-        raise WorkflowError("TRIVY_REPORT_ONLY must be either 'true' or 'false'")
-    report_only = report_only_value == "true"
-    if report_only and environment.get("TRIVY_SCAN_OUTCOME", "success") != "success":
-        return _scan_unavailable(
-            environment, f"scanner outcome: {environment.get('TRIVY_SCAN_OUTCOME', '')}"
-        )
     report_path = Path(required(environment, "TRIVY_REPORT"))
     try:
         vulnerabilities = _read_vulnerabilities(report_path)
     except WorkflowError as error:
-        if not report_only:
-            raise
         return _scan_unavailable(environment, str(error))
 
     severities = ("UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL")
@@ -113,20 +165,15 @@ def summarize_trivy(environment: Mapping[str, str]) -> dict[str, str]:
         summary.write("|----------|------:|\n")
         for severity in severities:
             summary.write(f"| {severity} | {counts[severity]} |\n")
-        mode = "report-only" if report_only or target == "dev" else "blocking HIGH/CRITICAL"
+        mode = "report-only" if target == "dev" else "blocking CRITICAL only"
         summary.write(f"\nTarget: `{target}`; policy: {mode}.\n")
 
-    if counts["HIGH"] == 0 and counts["CRITICAL"] == 0:
-        print("No HIGH or CRITICAL vulnerabilities found after VEX filtering")
+    if not vulnerabilities:
+        print("No vulnerabilities found after VEX filtering")
         return {}
 
-    print("HIGH and CRITICAL vulnerabilities:")
-    blocking_entries = [
-        (scan_target, vulnerability)
-        for scan_target, vulnerability in vulnerabilities
-        if vulnerability.get("Severity") in {"HIGH", "CRITICAL"}
-    ]
-    for scan_target, vulnerability in blocking_entries[:50]:
+    print("Vulnerabilities remaining after VEX filtering (first 50):")
+    for scan_target, vulnerability in vulnerabilities[:50]:
         fields = (
             scan_target,
             vulnerability.get("Severity", ""),
@@ -136,13 +183,18 @@ def summarize_trivy(environment: Mapping[str, str]) -> dict[str, str]:
             vulnerability.get("FixedVersion", ""),
         )
         print("\t".join(_single_line(str(field)) for field in fields))
-    message = (
-        f"Trivy found {counts['HIGH']} HIGH and {counts['CRITICAL']} CRITICAL "
-        "vulnerabilities after VEX filtering"
+    findings = ", ".join(
+        f"{counts[severity]} {severity}"
+        for severity in reversed(severities)
+        if counts[severity]
     )
-    if target != "dev" and not report_only:
-        raise WorkflowError(f"{message}; publication to {target} is blocked")
-    print(f"::warning::{message}; {target} scanning is report-only")
+    policy = "dev scanning is report-only" if target == "dev" else "only CRITICAL findings block publication"
+    print(f"::warning::Trivy found {findings} vulnerabilities after VEX filtering; {policy}")
+    if target != "dev" and counts["CRITICAL"]:
+        raise WorkflowError(
+            f"Trivy found {counts['CRITICAL']} CRITICAL vulnerabilities after VEX "
+            f"filtering; publication to {target} is blocked"
+        )
     return {}
 
 
