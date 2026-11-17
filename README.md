@@ -80,7 +80,9 @@ fixed token name for the requested target; the caller cannot choose either one.
 | Name | Description |
 |------|-------------|
 | `image_ref` | Published image reference, including its tag |
-| `image_digest` | Published `sha256` image digest |
+
+`image_ref` is returned only after a successful push. The `image_digest` output
+and post-push manifest lookup have been removed.
 
 #### Source selection and validation
 
@@ -288,28 +290,27 @@ remains disabled until that repository has a valid Trivy VEX index. To enable
 it later, change `enabled` in this central configuration and update the helper
 SHA. DHI exception downloads from that repository are independent of this flag.
 
-Trivy is temporarily report-only for every target. Findings remaining after VEX
-filtering are reported as follows:
+Findings remaining after VEX filtering are handled as follows:
 
-| Target | HIGH or CRITICAL findings |
-| --- | --- |
-| `dev`, `staging`, `prod`, `critical` | Warning; publication continues. |
-
-Allowing HIGH/CRITICAL findings through CI is a temporary rollout exception,
-not the intended permanent publication policy.
+| Target | CRITICAL findings | HIGH and lower findings |
+| --- | --- | --- |
+| `dev` | Warning; publication continues | Warning; publication continues |
+| `staging`, `prod`, `critical` | Publication blocked | Warning; publication continues |
 
 Findings without an available fix are also reported. The JSON report is uploaded
 before summarizing. VEX-suppressed findings are retained separately through
 `--show-suppressed` and excluded from the active severity counts.
 
-Preparation, scanning, report upload, and summary steps use
-`continue-on-error: true`. A failed/skipped scan or invalid/missing report is
-shown as **unavailable** in the summary, without inventing zero findings;
-publication continues. There is no empty-VEX fallback presented as a valid scan.
-The workflow sets `TRIVY_REPORT_ONLY=true`; the helper's strict mode remains
-available for future enforcement. The CI scan does not apply Harbor CVE
-allowlists. The official Trivy `v0.76.2` container is pinned by digest; the Harbor
-scanner is not upgraded by this change.
+Preparation and scanning use `continue-on-error` only for `dev`. The summary
+step enforces the policy; it no longer ignores errors. In dev, a failed/skipped
+scan or invalid/missing report is shown as **unavailable**, without inventing
+zero findings, and publication continues. In other targets, preparation,
+scanning, or report-validation errors block publication. Artifact upload
+remains advisory because the policy uses the local report, not the artifact.
+There is no empty-VEX fallback presented as a valid scan.
+The workflow sets `TRIVY_REPORT_ONLY=true` only for dev. The CI scan does not
+apply Harbor CVE allowlists. The official Trivy `v0.76.2` container is pinned by
+digest; the Harbor scanner is not upgraded by this change.
 
 Harbor policy is unchanged: CRITICAL vulnerabilities block image pulls in
 staging, production, and critical; dev scans images without this pull block.
@@ -334,11 +335,10 @@ selected production source branch. Restore missing Git tags only from verified
 release records. If history cannot be verified, coordinate a migration decision
 with SecOps; the workflow does not silently ignore legacy tags.
 
-After push, digest lookup makes at most three attempts, with 2- and 4-second
-delays and a 30-second timeout per attempt. If all attempts fail, the error
-explicitly states that push succeeded but digest lookup failed. Inspect the
-existing image and original push logs before rerunning: stable tags remain
-immutable, and preflight rejects a blind rebuild under the same tag.
+Publication completes after a successful push and returns `image_ref`, without
+a post-push digest lookup. Before rerunning a release that may already have
+been published, inspect the existing image and original push logs: stable tags
+remain immutable, and preflight rejects a blind rebuild under the same tag.
 
 #### Required repository and Harbor configuration
 
