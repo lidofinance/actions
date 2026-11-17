@@ -1,5 +1,8 @@
 name: Reusable build and push image to Harbor
 
+# TEMPORARY TEST ONLY: prod uses dev Harbor credentials and routing.
+# Revert this test-only commit before merging; prod validation/Trivy policy stays enabled.
+
 on:
   workflow_call:
     inputs:
@@ -43,10 +46,10 @@ jobs:
     name: Validate source and inputs
     runs-on: ubuntu-24.04
     outputs:
-      github_environment: ${{ steps.config.outputs.github_environment }}
+      github_environment: ${{ inputs.target == 'prod' && 'harbor_dev_release' || steps.config.outputs.github_environment }}
       image_tag: ${{ steps.config.outputs.image_tag }}
       is_release: ${{ steps.config.outputs.is_release }}
-      remote_name: ${{ steps.config.outputs.remote_name }}
+      remote_name: ${{ inputs.target == 'prod' && format('registry.dev.k8s-dev.org/{0}/{1}', inputs.harbor_project, inputs.image) || steps.config.outputs.remote_name }}
       source_branch: ${{ steps.source.outputs.source_branch }}
       source_sha: ${{ steps.source.outputs.source_sha }}
 
@@ -149,7 +152,7 @@ jobs:
         with:
           command: check-rollback
         env:
-          HARBOR_TOKEN: ${{ secrets.HARBOR_PROD_TOKEN }}
+          HARBOR_TOKEN: ${{ secrets.HARBOR_DEV_TOKEN }}
           IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
           REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
           REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}
@@ -340,9 +343,9 @@ jobs:
         if: ${{ inputs.target == 'prod' }}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
-          registry: registry.prod.k8s-prod.org
+          registry: registry.dev.k8s-dev.org
           username: ${{ vars.REGISTRY_USERNAME }}
-          password: ${{ secrets.HARBOR_PROD_TOKEN }}
+          password: ${{ secrets.HARBOR_DEV_TOKEN }}
 
       - name: Login to critical Harbor
         if: ${{ inputs.target == 'critical' }}
@@ -358,7 +361,7 @@ jobs:
         with:
           command: check-rollback
         env:
-          HARBOR_TOKEN: ${{ secrets.HARBOR_PROD_TOKEN }}
+          HARBOR_TOKEN: ${{ secrets.HARBOR_DEV_TOKEN }}
           IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
           REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
           REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}

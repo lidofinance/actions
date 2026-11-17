@@ -64,7 +64,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(
             self.workflow.count(
-                "HARBOR_TOKEN: ${{ secrets.HARBOR_PROD_TOKEN }}"
+                "HARBOR_TOKEN: ${{ secrets.HARBOR_DEV_TOKEN }}"
             ),
             2,
         )
@@ -99,7 +99,7 @@ class WorkflowContractTests(unittest.TestCase):
         )
 
     def test_harbor_preflight_runs_before_build_without_docker_login(self) -> None:
-        for target, token in (("production", "PROD"), ("critical", "CRIT")):
+        for target, token in (("production", "DEV"), ("critical", "CRIT")):
             block = re.search(
                 rf"(?ms)^      - name: Preflight {target} Harbor release.*?(?=^      - name:)",
                 self.workflow,
@@ -123,6 +123,22 @@ class WorkflowContractTests(unittest.TestCase):
             self.workflow.index("name: Prevent critical release rollback"),
             self.workflow.index("name: Push Docker image"),
         )
+
+    def test_temporary_prod_routing_uses_dev_without_relaxing_scan_policy(self) -> None:
+        self.assertIn("inputs.target == 'prod' && 'harbor_dev_release'", self.workflow)
+        self.assertIn(
+            "inputs.target == 'prod' && format('registry.dev.k8s-dev.org/{0}/{1}', inputs.harbor_project, inputs.image)",
+            self.workflow,
+        )
+        self.assertNotIn("secrets.HARBOR_PROD_TOKEN", self.workflow)
+        self.assertNotIn("registry.prod.k8s-prod.org", self.workflow)
+        login = re.search(
+            r"(?ms)^      - name: Login to production Harbor.*?(?=^      - name:)",
+            self.workflow,
+        ).group()
+        self.assertIn("registry: registry.dev.k8s-dev.org", login)
+        self.assertIn("password: ${{ secrets.HARBOR_DEV_TOKEN }}", login)
+        self.assertIn("TRIVY_REPORT_ONLY: ${{ inputs.target == 'dev' }}", self.workflow)
 
     def test_vex_is_loaded_from_the_pinned_helper_and_downloaded_before_scanning(self) -> None:
         self.assertIn(
