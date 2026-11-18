@@ -1,5 +1,4 @@
 import json
-import re
 from pathlib import Path
 from unittest import mock
 
@@ -230,23 +229,32 @@ class TrivyTests(TemporaryTestCase):
             self.environment(),
         )
 
-    def test_vex_config_comes_from_the_helper_checkout(self) -> None:
-        outputs = prepare_trivy({})
-        config = Path(outputs["vex_config"])
-        self.assertEqual(
-            config, Path(__file__).resolve().parents[1] / "vex" / "repository.yaml"
-        )
-        self.assertTrue(config.is_file())
-
-    def test_vex_sources_are_enabled_in_trust_priority_order(self) -> None:
-        config = Path(prepare_trivy({})["vex_config"]).read_text()
-        self.assertEqual(re.findall(
-            r"  - name: ([^\n]+)\n    url: ([^\n]+)\n    enabled: (true|false)\n", config,
-        ), [
-            ("internal", "https://github.com/lidofinance/vex", "true"),
-            ("dhi-vex", "https://github.com/docker-hardened-images/advisories", "true"),
-            ("default", "https://github.com/aquasecurity/vexhub", "true"),
+    def test_runtime_vex_config_is_private_and_authenticates_only_lido(self) -> None:
+        trusted = Path(__file__).resolve().parents[1] / "vex" / "repository.json"
+        original = trusted.read_text()
+        # Quotes and newlines must remain data, not extra configuration entries.
+        token = 'test-app-token"\nrepositories: []'
+        environment = {"RUNNER_TEMP": str(self.root), "VEX_REPO_TOKEN": token}
+        with mock.patch("builtins.print") as output:
+            config = Path(prepare_trivy(environment)["vex_config"])
+            second = Path(prepare_trivy(environment)["vex_config"])
+        self.assertNotEqual(config, second)
+        self.assertEqual(config.parent, self.root)
+        self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+        repositories = json.loads(config.read_text())["repositories"]
+        self.assertEqual(repositories, [
+            {"name": "internal", "url": "https://github.com/lidofinance/vex", "enabled": True, "token": token},
+            {"name": "dhi-vex", "url": "https://github.com/docker-hardened-images/advisories", "enabled": True},
+            {"name": "default", "url": "https://github.com/aquasecurity/vexhub", "enabled": True},
         ])
+        self.assertEqual(trusted.read_text(), original)
+        self.assertNotIn(token, original + str(output.call_args_list))
+
+    def test_missing_app_token_does_not_create_an_anonymous_config(self) -> None:
+        self.assert_workflow_error(
+            "VEX_REPO_TOKEN is empty", prepare_trivy, {"RUNNER_TEMP": str(self.root)},
+        )
+        self.assertEqual(list(self.root.glob("trivy-vex-*.json")), [])
 
     def test_missing_trusted_vex_config_fails_closed(self) -> None:
         with mock.patch(
