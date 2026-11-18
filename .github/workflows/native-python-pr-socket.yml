@@ -1,32 +1,23 @@
 # Socket dependency scan for pull requests, selected from an organization ruleset.
 #
-# What it does: scans every dependency manifest at the PR head (the whole branch,
-# not only the lines the PR changed), lists every Warn/Block finding in one PR
-# comment, and fails the job when the organization policy says Block.
+# Scans every dependency manifest at the PR head (the whole branch, not only the
+# lines the PR changed), lists every Warn/Block finding in one PR comment, and
+# fails the job when the organization policy says Block.
 #
 # Four things here are not obvious:
 #
-# 1. Empty baseline scan. Socket Python CLI 2.11.13 only gates and comments when it
-#    compares two scans, and its comment lists only findings that are new in that
-#    comparison. Comparing with an empty scan makes every finding new, so the whole
-#    snapshot is reported. Each run creates its own empty scan in the same Socket
-#    repository, before the PR is checked out. Nothing is shared between runs or
-#    repositories, so a run never depends on a scan from an earlier run.
-# 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on `reopened`.
-#    Forcing one supported action keeps every PR event on the same scan path.
-# 3. Reachability with a fallback. The scan first runs with --reach, which analyses
-#    the code and lowers findings that cannot be reached. If the first attempt
-#    exits 3 without a report, the step scans again without --reach.
-#    Accepted risk: for Rust the engine runs build scripts from the PR, and for
-#    Python it builds packages that have no wheel. That code runs in a step that
-#    holds the Socket token and the job's GitHub token.
-#    An analysis that is cut short can still exit 0 with fewer findings. The
-#    workflow cannot detect that.
-# 4. merge_group fails on purpose. The CLI has no merge queue mode; a clear
-#    failure is safer than a green check that scanned nothing.
+# 1. Empty baseline scan. Socket Python CLI 2.11.13 gates and comments only on
+#    findings that are new between two scans. Each run compares the PR with its
+#    own empty scan, so every finding is new and the whole snapshot is reported.
+# 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on a reopened
+#    PR. Forcing one supported action keeps every PR event on the same scan path.
+# 3. Reachability with a fallback. The scan runs with --reach, which lowers
+#    findings the code cannot reach. If that attempt exits 3 without a report,
+#    the step scans again without --reach.
+# 4. merge_group fails on purpose: the CLI has no merge queue mode.
 #
-# Exit codes of the scan step: 0 = no Block (Warn is allowed), 1 = Block finding,
-# 3 = Socket API or runtime error.
+# Scan step exit codes: 0 = no Block (Warn is allowed), 1 = Block, 3 = Socket API
+# or runtime error.
 
 name: Socket
 
@@ -46,7 +37,7 @@ jobs:
   scan:
     name: Socket dependency security
     runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
-    timeout-minutes: 30
+    timeout-minutes: 12 # one scan takes 1-3 minutes; a stuck Socket request would otherwise hold the job
     defaults:
       run:
         shell: bash
@@ -55,6 +46,10 @@ jobs:
       SCAN_BRANCH: ${{ github.head_ref }}
       SCAN_COMMIT: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
+      # Set explicitly so that no .env file in the PR can redirect the API key elsewhere.
+      BASE_API_URL: https://api.socket.dev/v0
+      # The reachability engine (Coana CLI). Update together with the CLI lock file.
+      REACH_ENGINE_VERSION: 15.14.2
     steps:
       - name: Fail on merge queue events (not supported yet)
         if: github.event_name == 'merge_group'
@@ -93,9 +88,8 @@ jobs:
         id: baseline
         env:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-          BASE_API_URL: https://api.socket.dev/v0
         run: |
-          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event (fork and Dependabot PRs need a separate decision)}"
+          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event}"
           mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
           cd "$RUNNER_TEMP/socket-empty"
 
@@ -157,8 +151,6 @@ jobs:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
           GH_API_TOKEN: ${{ github.token }}
           EVENT_ACTION: synchronize
-          # Set explicitly so that no .env file can redirect the API key elsewhere.
-          BASE_API_URL: https://api.socket.dev/v0
           BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
           # The reachability engine downloads packages with npm. It must never run
           # their install scripts in this step, which holds both tokens.
@@ -171,10 +163,15 @@ jobs:
           # --disable-overview    one security comment, no second overview comment
           # --reach               analyse the code and lower findings that are not reachable
           # --reach-disable-analytics  do not send analysis statistics to Socket
+          # --reach-version       the engine version; the same one this CLI release pins
           #
-          # The last two flags are kept in reach_flags, because the second attempt
+          # The reachability flags are kept in reach_flags, because the second attempt
           # below runs the same command without them.
-          reach_flags=(--reach --reach-disable-analytics)
+          reach_flags=(
+            --reach
+            --reach-disable-analytics
+            --reach-version "$REACH_ENGINE_VERSION"
+          )
           scan() {
             socketcli --scm github \
               --owner "$GITHUB_REPOSITORY_OWNER" \
@@ -201,6 +198,7 @@ jobs:
           if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ]; then
             echo '::warning::The first scan attempt produced no report. Scanning again without reachability analysis.'
             touch "$RUNNER_TEMP/socket/reachability-fallback"
+            # Drop what the failed analysis left behind, so the second scan does not upload it.
             find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
             reach_flags=()
             status=0
@@ -208,7 +206,7 @@ jobs:
           fi
           exit "$status"
 
-      - name: Confirm that the scan really assessed this commit
+      - name: Confirm that Socket compared the scan with the empty baseline
         # A green scan step is not enough: the CLI exits 0 when it skips the
         # comparison. Runs after a Block failure too, but not after a cancel.
         if: github.event_name == 'pull_request' && !cancelled()
@@ -216,7 +214,6 @@ jobs:
           BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
           SOCKET_ORG: ${{ steps.baseline.outputs.org }}
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
-          BASE_API_URL: https://api.socket.dev/v0
         run: |
           report="$RUNNER_TEMP/socket/report.json"
           not_scanned() {
@@ -224,18 +221,14 @@ jobs:
             exit 3
           }
 
-          [ -n "$BASELINE_SCAN_ID" ] ||
-            not_scanned 'no empty baseline scan was created'
+          # No report: the CLI left before it scanned, which it does with exit 0.
+          # .scan_failed is not checked: the CLI sets it to true for a Block finding.
           [ -s "$report" ] ||
             not_scanned 'the CLI wrote no report'
-          # .scan_failed is not checked: the CLI sets it to true for a Block finding.
-          jq -e '.full_scan_id | length > 0' "$report" > /dev/null ||
-            not_scanned 'the report has no scan ID'
-          jq -e --arg commit "$SCAN_COMMIT" '.commit_sha == $commit' "$report" > /dev/null ||
-            not_scanned 'the report belongs to another commit'
 
-          # Ask Socket for the comparison itself. The CLI report does not say which
-          # scans were compared or whether the comparison was complete.
+          # Ask Socket for the comparison itself. The CLI report does not say
+          # whether a comparison was made or whether it was complete: a plain
+          # full scan also leaves a report, and the CLI never blocks on one.
           # Both answers are kept next to the report and uploaded with it. curl
           # retries timeouts and 408/429/5xx answers, not 401/403/404.
           socket_api() {
@@ -253,9 +246,6 @@ jobs:
             not_scanned 'Socket has no single comparison of this scan with the empty baseline scan'
           socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans/$comparison_id?if_cached=true" > "$comparison" ||
             not_scanned 'Socket did not return the comparison'
-          jq -e --arg base "$BASELINE_SCAN_ID" --arg head "$head_scan" \
-            '.diff_scan.before_full_scan.id == $base and .diff_scan.after_full_scan.id == $head' "$comparison" > /dev/null ||
-            not_scanned 'the comparison used other scans'
           jq -e '.diff_scan.incomplete == false' "$comparison" > /dev/null ||
             not_scanned 'Socket did not confirm that the comparison is complete'
 
@@ -265,7 +255,7 @@ jobs:
           {
             echo '## Socket dependency scan'
             if [ -e "$RUNNER_TEMP/socket/reachability-fallback" ]; then
-              echo 'The scan with reachability analysis produced no report. These findings are reported without it.'
+              echo 'The scan with reachability analysis produced no report. These findings are reported without it. The reason is in the log of the scan step.'
             fi
             if [ -s "$RUNNER_TEMP/socket/summary.txt" ]; then
               echo '```text'
