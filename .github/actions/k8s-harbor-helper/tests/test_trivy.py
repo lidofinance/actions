@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from unittest import mock
 
@@ -237,18 +238,15 @@ class TrivyTests(TemporaryTestCase):
         )
         self.assertTrue(config.is_file())
 
-    def test_public_vex_sources_are_enabled_and_internal_source_stays_disabled(self) -> None:
+    def test_vex_sources_are_enabled_in_trust_priority_order(self) -> None:
         config = Path(prepare_trivy({})["vex_config"]).read_text()
-        for name, url, enabled in (
-            ("default", "https://github.com/aquasecurity/vexhub", "true"),
+        self.assertEqual(re.findall(
+            r"  - name: ([^\n]+)\n    url: ([^\n]+)\n    enabled: (true|false)\n", config,
+        ), [
+            ("internal", "https://github.com/lidofinance/vex", "true"),
             ("dhi-vex", "https://github.com/docker-hardened-images/advisories", "true"),
-            ("internal", "https://github.com/lidofinance/vex-db", "false"),
-        ):
-            with self.subTest(name=name):
-                self.assertIn(
-                    f"  - name: {name}\n    url: {url}\n    enabled: {enabled}\n",
-                    config,
-                )
+            ("default", "https://github.com/aquasecurity/vexhub", "true"),
+        ])
 
     def test_missing_trusted_vex_config_fails_closed(self) -> None:
         with mock.patch(
