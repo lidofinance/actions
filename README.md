@@ -274,20 +274,69 @@ configuration are mounted read-only. The image remains loaded in Docker for
 publication without rebuilding. Both reusable workflow jobs use `ubuntu-24.04`.
 
 Trivy uses its standard vulnerability database and applies VEX statements from
-both Aqua VEX Hub and Docker Hardened Images advisories:
+these enabled repositories, in descending priority:
 
-- `https://github.com/aquasecurity/vexhub`;
-- `https://github.com/docker-hardened-images/advisories`.
+1. Lido (`internal`): `https://github.com/lidofinance/vex`.
+2. Docker Hardened Images (`dhi-vex`): `https://github.com/docker-hardened-images/advisories`.
+3. Aqua VEX Hub (`default`): `https://github.com/aquasecurity/vexhub`.
 
 The repository configuration is stored in the pinned helper action at
 `.github/actions/k8s-harbor-helper/vex/repository.yaml`, independently of the
-application checkout, and is mounted read-only into Trivy. Both enabled VEX
+application checkout, and is mounted read-only into Trivy. All enabled VEX
 repositories are downloaded before scanning; a download failure makes the scan
 unavailable, not clean.
-The internal VEX entry points to `https://github.com/lidofinance/vex-db` but
-remains disabled until that repository has a valid Trivy VEX index. To enable
-it later, change `enabled` in this central configuration and update the helper
-SHA. DHI exception downloads from that repository are independent of this flag.
+
+In Trivy `v0.76.2`, precedence is package-level: the first repository with a
+matching package index entry supplies its VEX document. A higher-priority
+`affected` status therefore cannot be suppressed by a lower-priority
+`not_affected` statement. Conversely, Lido `not_affected` can override a lower
+source. A missing CVE statement in a selected Lido package document does not
+fall through to DHI/default; the finding remains active. See the
+[pinned resolver](https://github.com/aquasecurity/trivy/blob/v0.76.2/pkg/vex/repo.go).
+
+##### Private Lido VEX access
+
+Provide optional secret `VEX_REPO_READ_TOKEN`, inherited from the calling
+repository/organization (`secrets: inherit`) or supplied by the selected
+Environment. SecOps manages this credential through Terraform. For a fine-grained
+personal access token, select resource owner `lidofinance`, repository access
+to **only `lidofinance/vex`**, and repository permission **Contents: Read-only**.
+No write, Actions, or Packages permissions are needed for repository-file
+downloads. Obtain organization approval if required by its token policy. See
+[GitHub's content API permissions](https://docs.github.com/en/rest/repos/contents#get-repository-content).
+
+The scan step exposes this secret as `GITHUB_TOKEN` and forwards it by name
+(`docker run --env GITHUB_TOKEN`) to both Trivy containers. No credential file
+is generated and the token value is not included in Docker command arguments.
+Trivy's GitHub downloader uses it for GitHub-hosted VEX downloads, including the
+public DHI/default sources; this is not per-repository authentication. Keep the
+token restricted to the Lido repository. See the
+[pinned downloader](https://github.com/aquasecurity/trivy/blob/v0.76.2/pkg/downloader/download.go).
+
+The calling application's automatic `github.token` is not used as a fallback:
+it does not grant access to the separate private Lido repository. Without
+`VEX_REPO_READ_TOKEN`, downloads are anonymous. Private manifest/bundle
+locations must use supported `github.com` URLs; the GitHub token fallback
+does not provide authentication for arbitrary non-GitHub download endpoints.
+
+The DHI exception policy remains at `lidofinance/vex-db` and continues using
+`VEX_DB_READ_TOKEN`. It is independent of the VEX repository and the new credential.
+
+##### Rollout hold: Lido repository not ready
+
+This change enables the Lido entry in preparation for rollout. Do not merge or
+deploy it while `lidofinance/vex` is empty or lacks a valid `vex-repository.json`,
+supported `0.1` index, and referenced VEX documents. An empty/private inaccessible
+source fails the download and blocks staging/prod/critical; dev remains report-only.
+There is intentionally no silent fallback that drops the highest-priority source.
+
+Once the repository is ready, verify private manifest/bundle downloads, conflict
+precedence in both directions (`affected` vs `not_affected`), partial package/CVE
+coverage, and the unchanged dev/non-dev publication policy. Update the helper
+commit pin before running the candidate workflow. No live private-repository or
+conflicting-VEX validation is claimed by the local helper tests.
+
+##### Publication policy
 
 Findings remaining after VEX filtering are handled as follows:
 

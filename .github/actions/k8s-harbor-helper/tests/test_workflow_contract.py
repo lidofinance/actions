@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/k8s-build-push-harbor.yml"
-HELPER_SHA = "c19bf7880245f2f15d387279236bebb0eb201349"
+HELPER_SHA = "1774108fc12d42249b4502285865b1664690f8cf"
 HELPER_REFERENCE = "lidofinance/actions/.github/actions/k8s-harbor-helper"
 SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
 
@@ -133,6 +133,14 @@ class WorkflowContractTests(unittest.TestCase):
         )
 
     def test_vex_is_loaded_from_the_pinned_helper_and_downloaded_before_scanning(self) -> None:
+        scan = re.search(
+            r"(?ms)^      - name: Scan Docker image with Trivy.*?(?=^      - name:)",
+            self.workflow,
+        ).group()
+        self.assertIn("GITHUB_TOKEN: ${{ secrets.VEX_REPO_READ_TOKEN }}", scan)
+        self.assertEqual(self.workflow.count("secrets.VEX_REPO_READ_TOKEN"), 1)
+        self.assertIn("--env GITHUB_TOKEN\n", scan)
+        self.assertNotIn("--env GITHUB_TOKEN=", scan)
         self.assertIn(
             "VEX_CONFIG: ${{ steps.trivy-config.outputs.vex_config }}", self.workflow
         )

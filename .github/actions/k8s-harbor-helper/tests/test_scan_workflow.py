@@ -39,6 +39,7 @@ class TrivyScanWorkflowTests(unittest.TestCase):
             if phase == "save":
                 Path(args[args.index("--output") + 1]).write_bytes(b"test image archive")
             else:
+                assert os.environ["GITHUB_TOKEN"] == os.environ["EXPECTED_VEX_TOKEN"]
                 mounts = {}
                 for index, argument in enumerate(args):
                     if argument == "--volume":
@@ -61,6 +62,8 @@ class TrivyScanWorkflowTests(unittest.TestCase):
             "VEX_CONFIG": str(self.config),
             "DOCKER_CALLS": str(self.calls),
             "FAIL_PHASE": "",
+            "GITHUB_TOKEN": "",
+            "EXPECTED_VEX_TOKEN": "",
         }
         self.script = next(
             block for block in run_blocks(WORKFLOW.read_text())
@@ -107,6 +110,20 @@ class TrivyScanWorkflowTests(unittest.TestCase):
         self.assertIn("--skip-vex-repo-update", scan)
         self.assertNotIn("local-build:123-1", scan)
         self.assertTrue((trivy_dir / "reports/trivy-report.json").is_file())
+        self.assertTrue(self.config.is_file())
+
+    def test_vex_auth_is_forwarded_by_environment_without_token_in_arguments(self) -> None:
+        for token in ("", "test-read-only-vex-token"):
+            with self.subTest(authenticated=bool(token)):
+                result = self.run_scan(GITHUB_TOKEN=token, EXPECTED_VEX_TOKEN=token)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                for args in self.docker_calls()[-2:]:
+                    self.assertIn(
+                        ("--env", "GITHUB_TOKEN"), list(zip(args, args[1:])),
+                    )
+                if token:
+                    self.assertNotIn(token, result.stdout + result.stderr + self.calls.read_text())
+                self.assertEqual(self.config.read_text(), "repositories: []\n")
 
     def test_failed_export_does_not_start_trivy(self) -> None:
         result = self.run_scan(FAIL_PHASE="save")
