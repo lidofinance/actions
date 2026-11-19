@@ -13,7 +13,8 @@
 #    PR. Forcing one supported action keeps every PR event on the same scan path.
 # 3. Reachability with a fallback. The scan runs with --reach, which lowers
 #    findings the code cannot reach. If that attempt exits 3 without a report,
-#    the step scans again without --reach.
+#    the step scans again without --reach. A repository skips the analysis by
+#    setting the repository variable SOCKET_REACHABILITY to "off".
 # 4. merge_group fails on purpose: the CLI has no merge queue mode.
 #
 # Scan step exit codes: 0 = no Block (Warn is allowed), 1 = Block, 3 = Socket API
@@ -152,6 +153,7 @@ jobs:
           GH_API_TOKEN: ${{ github.token }}
           EVENT_ACTION: synchronize
           BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+          REACHABILITY: ${{ vars.SOCKET_REACHABILITY }}
           # The reachability engine downloads packages with npm. It must never run
           # their install scripts in this step, which holds both tokens.
           NPM_CONFIG_IGNORE_SCRIPTS: 'true'
@@ -172,6 +174,10 @@ jobs:
             --reach-disable-analytics
             --reach-version "$REACH_ENGINE_VERSION"
           )
+          if [ "${REACHABILITY,,}" = off ]; then # any letter case
+            echo '::notice::Reachability analysis is switched off by the repository variable SOCKET_REACHABILITY.'
+            reach_flags=()
+          fi
           scan() {
             socketcli --scm github \
               --owner "$GITHUB_REPOSITORY_OWNER" \
@@ -195,7 +201,7 @@ jobs:
 
           # Exit 3 without a report: the first attempt failed before it assessed
           # anything, most often in the reachability analysis. Scan again without it.
-          if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ]; then
+          if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ] && [ "${#reach_flags[@]}" -gt 0 ]; then
             echo '::warning::The first scan attempt produced no report. Scanning again without reachability analysis.'
             touch "$RUNNER_TEMP/socket/reachability-fallback"
             # Drop what the failed analysis left behind, so the second scan does not upload it.
