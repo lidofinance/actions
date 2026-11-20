@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Mapping
 
@@ -9,10 +10,22 @@ from harbor_helper.config import TARGETS
 
 
 def prepare_trivy(environment: Mapping[str, str]) -> dict[str, str]:
-    config = Path(__file__).resolve().parents[1] / "vex" / "repository.yaml"
+    config = Path(__file__).resolve().parents[1] / "vex" / "repository.json"
     if not config.is_file():
         raise WorkflowError("The trusted Trivy VEX repository configuration is missing")
-    return {"vex_config": str(config)}
+    # JSON is valid YAML and avoids a YAML dependency in the trusted helper.
+    repositories = json.loads(config.read_text())
+    internal = next(repo for repo in repositories["repositories"] if repo["name"] == "internal")
+    internal["token"] = required(environment, "VEX_REPO_TOKEN")
+    content = json.dumps(repositories, indent=2) + "\n"
+    # NamedTemporaryFile creates a unique mode-0600 file outside the build context
+    # and outside the directories mounted writable into Trivy.
+    with tempfile.NamedTemporaryFile(
+        mode="w", prefix="trivy-vex-", suffix=".json",
+        dir=required(environment, "RUNNER_TEMP"), delete=False,
+    ) as runtime_config:
+        runtime_config.write(content)
+    return {"vex_config": runtime_config.name}
 
 
 def _read_vulnerabilities(report_path: Path) -> list[tuple[str, dict[str, object]]]:

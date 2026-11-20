@@ -274,20 +274,112 @@ configuration are mounted read-only. The image remains loaded in Docker for
 publication without rebuilding. Both reusable workflow jobs use `ubuntu-24.04`.
 
 Trivy uses its standard vulnerability database and applies VEX statements from
-both Aqua VEX Hub and Docker Hardened Images advisories:
+these enabled repositories, in descending priority:
 
-- `https://github.com/aquasecurity/vexhub`;
-- `https://github.com/docker-hardened-images/advisories`.
+1. Lido (`internal`): `https://github.com/lidofinance/vex`.
+2. Docker Hardened Images (`dhi-vex`): `https://github.com/docker-hardened-images/advisories`.
+3. Aqua VEX Hub (`default`): `https://github.com/aquasecurity/vexhub`.
 
 The repository configuration is stored in the pinned helper action at
-`.github/actions/k8s-harbor-helper/vex/repository.yaml`, independently of the
-application checkout, and is mounted read-only into Trivy. Both enabled VEX
+`.github/actions/k8s-harbor-helper/vex/repository.json`, independently of the
+application checkout. Its runtime copy is mounted read-only into Trivy at
+`/root/.trivy/vex/repository.yaml`, the path expected by Trivy. All enabled VEX
 repositories are downloaded before scanning; a download failure makes the scan
 unavailable, not clean.
-The internal VEX entry points to `https://github.com/lidofinance/vex-db` but
-remains disabled until that repository has a valid Trivy VEX index. To enable
-it later, change `enabled` in this central configuration and update the helper
-SHA. DHI exception downloads from that repository are independent of this flag.
+JSON is a YAML subset, so Trivy accepts it at that path and the helper can generate
+the runtime configuration with Python's standard library, without a YAML dependency.
+
+In Trivy `v0.76.2`, precedence is package-level: the first repository with a
+matching package index entry supplies its VEX document. A higher-priority
+`affected` status therefore cannot be suppressed by a lower-priority
+`not_affected` statement. Conversely, Lido `not_affected` can override a lower
+source. A missing CVE statement in a selected Lido package document does not
+fall through to DHI/default; the finding remains active. See the
+[pinned resolver](https://github.com/aquasecurity/trivy/blob/v0.76.2/pkg/vex/repo.go).
+
+##### Private Lido VEX access
+
+Install a dedicated GitHub App on **only `lidofinance/vex`**, granting
+**Contents: Read-only** (Metadata: Read-only is automatic). No write, Actions,
+or Packages permissions, PAT, or OAuth client secret are required. SecOps manages
+the configuration and secret provisioning through Terraform:
+
+- Actions variable `VEX_APP_CLIENT_ID`: the App's Client ID (not secret).
+- Actions secret `VEX_APP_PRIVATE_KEY`: the complete PEM private key, including
+  its header, footer, and newlines; not a filesystem path.
+
+The calling repository needs neither an App installation nor its own token with
+access to VEX. However, reusable workflow jobs execute in the caller's context:
+secrets stored only in the `actions` repository are not automatically available.
+Make the variable and key available to approved callers, for example through a
+restricted organization variable/secret, and pass the key by name or through
+`secrets: inherit`. A selected caller Environment can also supply the key.
+See [GitHub's reusable workflow secrets documentation](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows#passing-inputs-and-secrets-to-a-reusable-workflow).
+This does not isolate the App key to the reusable workflow: another authorized
+workflow in a caller repository could also use the secret to mint a token.
+Use a dedicated read-only App and restrict which repositories receive its key.
+Keeping the key inaccessible to callers would require a separate credential
+broker or another centrally controlled execution mechanism.
+
+The publish job creates an installation token immediately before VEX preparation
+using SHA-pinned `actions/create-github-app-token`. The request explicitly limits
+access to `owner: lidofinance`, `repositories: vex`, and `permission-contents: read`.
+The token expires after one hour; the action also revokes it in its job post-step.
+Create and consume it in the same job. See the
+[action documentation](https://github.com/actions/create-github-app-token).
+
+`prepare-trivy` copies the trusted configuration into a unique mode-0600 file
+under `RUNNER_TEMP`, outside the build context, cache, and reports. It injects the
+installation token into the native `token` field of **only the Lido entry**.
+Both Trivy containers mount this file read-only; the cleanup step removes it
+after scanning, including on failure. Do not log or upload this credential file.
+The PEM key is never mounted into Trivy. No token value is passed in Docker
+arguments or the global `GITHUB_TOKEN` environment variable; DHI/default entries
+remain unauthenticated. See the
+[pinned downloader](https://github.com/aquasecurity/trivy/blob/v0.76.2/pkg/downloader/download.go).
+
+The VEX publisher must use a GitHub API archive URL in `vex-repository.json`:
+
+```json
+"locations": [
+  {"url": "https://api.github.com/repos/lidofinance/vex/tarball/main//*?archive=tar.gz"}
+]
+```
+
+Our private-repository tests returned 404 for the regular `github.com/.../archive/`
+URL even with valid credentials. The API URL worked with both a read-only PAT
+and an App installation token. `//*` selects the archive's root directory;
+`archive=tar.gz` specifies its format. Trivy's native repository `token` field
+authenticates both the manifest and API archive requests. It also applies to
+bundle locations, so only trusted download endpoints may be published in the
+manifest. The automatic caller `github.token` is not used as a fallback.
+
+Missing/invalid App credentials or a VEX download failure make scanning unavailable:
+dev remains report-only; staging/prod/critical fail closed. The key is optional
+in the workflow-call schema only to preserve that dev behavior, not to allow
+anonymous fallback for the private source.
+
+The DHI exception policy remains at `lidofinance/vex-db` and continues using
+`VEX_DB_READ_TOKEN`. It is independent of the VEX repository and the App credentials.
+
+##### Rollout hold: Lido repository not ready
+
+This change enables the Lido entry in preparation for rollout. Do not merge or
+deploy it while `lidofinance/vex` is empty or lacks a valid `vex-repository.json`,
+supported `0.1` index, and referenced VEX documents. An empty/private inaccessible
+source fails the download and blocks staging/prod/critical; dev remains report-only.
+There is intentionally no silent fallback that drops the highest-priority source.
+
+Once the repository is ready, verify private manifest/bundle downloads, conflict
+precedence in both directions (`affected` vs `not_affected`), partial package/CVE
+coverage, and the unchanged dev/non-dev publication policy. Update the helper
+commit pin whenever the helper changes. Local Trivy `v0.76.2` smoke tests against
+a private test repository verified fresh anonymous/invalid-token rejection,
+App-token downloads of the manifest/archive/index/synthetic VEX, and token
+revocation (HTTP 401 afterwards). This is not validation of `lidofinance/vex`,
+the GitHub Actions integration, CVE suppression, precedence, or Harbor behavior.
+
+##### Publication policy
 
 Findings remaining after VEX filtering are handled as follows:
 
