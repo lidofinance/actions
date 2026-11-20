@@ -265,6 +265,7 @@ class WorkflowContractTests(unittest.TestCase):
             "Upload effective DHI exceptions and source",
             "Check DHI base images and approved exceptions",
             "Login to DHI registry",
+            "Login to Docker Hub for Lido DHI",
             "Prepare trusted Trivy VEX configuration",
             "Scan Docker image with Trivy",
             "Upload Trivy vulnerability report",
@@ -295,8 +296,19 @@ class WorkflowContractTests(unittest.TestCase):
             self.workflow.index("name: Login to DHI registry"),
             self.workflow.index("name: Build Docker image"),
         )
-        self.assertEqual(self.workflow.count("secrets.DHI_TOKEN"), 1)
-        self.assertEqual(self.workflow.count("secrets.DHI_USERNAME"), 1)
+        mirror = re.search(
+            r"(?ms)^      - name: Login to Docker Hub for Lido DHI.*?(?=^      - name:)",
+            self.workflow,
+        )
+        self.assertIsNotNone(mirror)
+        self.assertIn("uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9", mirror.group())
+        self.assertIn("registry: docker.io", mirror.group())
+        self.assertIn("username: ${{ secrets.DHI_USERNAME }}", mirror.group())
+        self.assertIn("password: ${{ secrets.DHI_TOKEN }}", mirror.group())
+        self.assertNotIn("HARBOR_", mirror.group())
+        self.assertLess(mirror.start(), self.workflow.index("name: Build Docker image"))
+        self.assertEqual(self.workflow.count("secrets.DHI_TOKEN"), 2)
+        self.assertEqual(self.workflow.count("secrets.DHI_USERNAME"), 2)
 
     def test_trivy_version_is_digest_pinned(self) -> None:
         self.assertIn(
