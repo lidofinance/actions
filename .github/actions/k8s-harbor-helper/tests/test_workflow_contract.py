@@ -296,17 +296,17 @@ class WorkflowContractTests(unittest.TestCase):
             self.workflow.index("name: Login to DHI registry"),
             self.workflow.index("name: Build Docker image"),
         )
-        mirror = re.search(
+        lido_dhi_login = re.search(
             r"(?ms)^      - name: Login to Docker Hub for Lido DHI.*?(?=^      - name:)",
             self.workflow,
         )
-        self.assertIsNotNone(mirror)
-        self.assertIn("uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9", mirror.group())
-        self.assertIn("registry: docker.io", mirror.group())
-        self.assertIn("username: ${{ secrets.DHI_USERNAME }}", mirror.group())
-        self.assertIn("password: ${{ secrets.DHI_TOKEN }}", mirror.group())
-        self.assertNotIn("HARBOR_", mirror.group())
-        self.assertLess(mirror.start(), self.workflow.index("name: Build Docker image"))
+        self.assertIsNotNone(lido_dhi_login)
+        self.assertIn("uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9", lido_dhi_login.group())
+        self.assertIn("registry: docker.io", lido_dhi_login.group())
+        self.assertIn("username: ${{ secrets.DHI_USERNAME }}", lido_dhi_login.group())
+        self.assertIn("password: ${{ secrets.DHI_TOKEN }}", lido_dhi_login.group())
+        self.assertNotIn("HARBOR_", lido_dhi_login.group())
+        self.assertLess(lido_dhi_login.start(), self.workflow.index("name: Build Docker image"))
         self.assertEqual(self.workflow.count("secrets.DHI_TOKEN"), 2)
         self.assertEqual(self.workflow.count("secrets.DHI_USERNAME"), 2)
 
