@@ -41,7 +41,10 @@ jobs:
     name: Socket dependency security
     # A run started by Dependabot gets Dependabot secrets only, so it has no
     # Socket API key. The job is skipped, and a skipped job passes the ruleset.
-    if: github.actor != 'dependabot[bot]'
+    # Both conditions are needed. github.actor alone is whoever caused the last
+    # event: Dependabot of a fork can push to a fork PR that a person opened,
+    # and that PR must not skip the scan.
+    if: ${{ !(github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]') }}
     runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
     timeout-minutes: 12 # one scan takes 1-3 minutes; a stuck Socket request would otherwise hold the job
     defaults:
@@ -110,12 +113,15 @@ jobs:
               curl -fsS --max-time 60 -K - "$@"
           }
 
-          # One line per organization the key can see.
-          org="$(socket_api "$BASE_API_URL/organizations" | jq -r '.organizations[].slug')"
-          if [ -z "$org" ] || [ "$(wc -l <<< "$org")" -ne 1 ]; then
+          # Socket lists the organizations of this API key. The scan is created
+          # in the only one; "slug" is its short name in API addresses.
+          organizations="$(socket_api "$BASE_API_URL/organizations")"
+          org_count="$(jq '.organizations | length' <<< "$organizations")"
+          if [ "$org_count" != 1 ]; then
             echo '::error::The Socket API key must belong to exactly one organization.'
             exit 3
           fi
+          org="$(jq -r '.organizations[].slug' <<< "$organizations")"
 
           # tmp=true keeps this service scan out of the Socket dashboard. The CLI
           # has no flag for it, so this one request goes to the API directly.
@@ -238,12 +244,15 @@ jobs:
           [ -s "$report" ] ||
             not_scanned 'the CLI wrote no report'
 
-          # After a comparison the report links to .../diff/<baseline scan>/<this scan>.
-          # After a plain full scan the same field links to .../sbom/<this scan>.
-          # The CLI itself exits 3 when Socket marks the comparison incomplete.
-          diff_url="$(jq -r '.diff_url // empty' "$report" || true)"
-          [[ "$diff_url" == */diff/"$BASELINE_SCAN_ID"/* ]] ||
+          # The report holds a link to the result in Socket. Its form tells what the CLI did:
+          #   compared two scans:       .../diff/<baseline scan>/<PR scan>
+          #   one scan, no comparison:  .../sbom/<PR scan>
+          # Only the first form, with our baseline scan in it, counts as scanned.
+          # (When Socket marks a comparison incomplete, the CLI itself exits 3.)
+          result_link="$(jq -r '.diff_url' "$report")"
+          if [[ "$result_link" != *"/diff/$BASELINE_SCAN_ID/"* ]]; then
             not_scanned 'the CLI did not compare this scan with the empty baseline scan'
+          fi
 
       - name: Publish the job summary
         if: always()
