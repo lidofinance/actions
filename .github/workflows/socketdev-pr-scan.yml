@@ -113,15 +113,12 @@ jobs:
               curl -fsS --max-time 60 -K - "$@"
           }
 
-          # Socket lists the organizations of this API key. The scan is created
-          # in the only one; "slug" is its short name in API addresses.
-          organizations="$(socket_api "$BASE_API_URL/organizations")"
-          org_count="$(jq '.organizations | length' <<< "$organizations")"
-          if [ "$org_count" != 1 ]; then
+          org="$(socket_api "$BASE_API_URL/organizations" |
+            jq -r '.organizations | to_entries | if length == 1 then .[0].value.slug else empty end')"
+          if [ -z "$org" ]; then
             echo '::error::The Socket API key must belong to exactly one organization.'
             exit 3
           fi
-          org="$(jq -r '.organizations[].slug' <<< "$organizations")"
 
           # tmp=true keeps this service scan out of the Socket dashboard. The CLI
           # has no flag for it, so this one request goes to the API directly.
