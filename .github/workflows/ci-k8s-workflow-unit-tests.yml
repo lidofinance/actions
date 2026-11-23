@@ -6,6 +6,7 @@ on:
       - ".github/actions/k8s-harbor-helper/**"
       - ".github/workflows/ci-k8s-workflow-unit-tests.yml"
       - ".github/workflows/k8s-build-push-harbor.yml"
+      - ".github/workflows/socketdev-release-scan.yml"
   push:
     branches:
       - main
@@ -13,6 +14,7 @@ on:
       - ".github/actions/k8s-harbor-helper/**"
       - ".github/workflows/ci-k8s-workflow-unit-tests.yml"
       - ".github/workflows/k8s-build-push-harbor.yml"
+      - ".github/workflows/socketdev-release-scan.yml"
   workflow_dispatch:
 
 permissions:

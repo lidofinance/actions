@@ -323,6 +323,35 @@ Harbor block under this CRITICAL-only policy.
 Source validation, build failures, Harbor login, anti-rollback, and push remain
 fatal.
 
+#### Dependency scanning (Socket)
+
+Before the image is built, the `socket` job scans the dependency manifests of
+the validated commit with Socket. It calls the reusable workflow
+`socketdev-release-scan.yml` from the same commit of this repository. `publish`
+starts only after it.
+
+The job is separate from `publish` on purpose: the scan checks out the
+application code and runs the Socket reachability engine on it, so it gets the
+Socket API key and nothing else. It has no GitHub Environment and no Harbor or
+DHI credentials.
+
+| Verdict | Meaning | `dev` | `staging`, `prod`, `critical` |
+| --- | --- | --- | --- |
+| `pass` | Scanned; the Socket policy has no Block finding | Publication continues | Publication continues |
+| `block` | The Socket policy says Block | Warning; publication continues | Publication blocked |
+| `not-scanned` | No completed assessment: missing API key, Socket API error, or a scan the CLI did not compare | Warning; publication continues | Publication blocked |
+
+Warn findings never block. They are listed in the job summary, and the JSON
+report is stored as a workflow artifact for 30 days.
+
+The scan reads `SOCKET_SECURITY_API_KEY`, an organization secret that the
+caller passes with `secrets: inherit`. A repository can switch reachability
+analysis off with the repository variable `SOCKET_REACHABILITY=off`.
+
+Socket reads manifests and lock files, not the image. It does not see OS
+packages, the base image, or libraries that are not in a lock file; Trivy
+covers those.
+
 #### Release preflight and partial-failure recovery
 
 Prod/critical preflight rejects an already-published target tag before spending

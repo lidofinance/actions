@@ -9,6 +9,8 @@ WORKFLOW = REPOSITORY_ROOT / ".github/workflows/k8s-build-push-harbor.yml"
 HELPER_SHA = "c19bf7880245f2f15d387279236bebb0eb201349"
 HELPER_REFERENCE = "lidofinance/actions/.github/actions/k8s-harbor-helper"
 SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
+SOCKET_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/socketdev-release-scan.yml"
+SOCKET_LOCK = ".github/tools/socket-python-cli.lock"
 
 
 def run_blocks(workflow: str) -> list[str]:
@@ -185,6 +187,58 @@ class WorkflowContractTests(unittest.TestCase):
             re.findall(r"(?m)^    runs-on: (.+)$", self.workflow),
             ["ubuntu-24.04", "ubuntu-24.04"],
         )
+
+    def test_socket_scan_gates_publication_without_publication_secrets(self) -> None:
+        job = re.search(r"(?ms)^  socket:\n.*?(?=^  publish:)", self.workflow)
+        self.assertIsNotNone(job)
+        self.assertIn("    needs: validate\n", job.group())
+        self.assertIn(
+            "    uses: ./.github/workflows/socketdev-release-scan.yml\n", job.group()
+        )
+        for argument, value in (
+            ("source_sha", "needs.validate.outputs.source_sha"),
+            ("source_branch", "needs.validate.outputs.source_branch"),
+            ("target", "inputs.target"),
+        ):
+            self.assertIn(f"      {argument}: ${{{{ {value} }}}}\n", job.group())
+        self.assertEqual(
+            re.findall(r"secrets\.([A-Z_]+)", job.group()), ["SOCKET_SECURITY_API_KEY"]
+        )
+        self.assertNotIn("secrets: inherit", job.group())
+        self.assertNotIn("environment:", job.group())
+        self.assertNotIn("continue-on-error:", job.group())
+        self.assertNotIn("if:", job.group())
+        self.assertIn("    needs: [validate, socket]\n", self.workflow)
+        self.assertEqual(self.workflow.count("SOCKET_SECURITY_API_KEY"), 2)
+
+    def test_socket_scan_workflow_matches_the_release_contract(self) -> None:
+        scan = SOCKET_WORKFLOW.read_text()
+        for name in ("source_sha", "source_branch", "target"):
+            self.assertRegex(
+                scan, rf"(?m)^      {name}:\n(?:        .*\n)*?        required: true\n"
+            )
+        self.assertIn("    continue-on-error: ${{ inputs.target == 'dev' }}\n", scan)
+        self.assertIn("permissions:\n  contents: read\n\njobs:", scan)
+        code = "\n".join(
+            line for line in scan.splitlines() if not line.lstrip().startswith("#")
+        )
+        self.assertNotIn("--scm", code)
+        self.assertNotIn("--default-branch", code)
+        for flag in ('--base-scan-id "$BASELINE_SCAN_ID"', "--strict-blocking"):
+            self.assertIn(flag, scan)
+        self.assertEqual(
+            set(re.findall(r"secrets\.([A-Z_]+)", code)), {"SOCKET_SECURITY_API_KEY"}
+        )
+        self.assertNotIn("github.workflow_sha", code)
+        lock_commit = re.search(
+            r"repository: lidofinance/actions\n(?:          #.*\n)*          ref: ([0-9a-f]{40})\n",
+            scan,
+        )
+        self.assertIsNotNone(lock_commit)
+        self.assertTrue((REPOSITORY_ROOT / SOCKET_LOCK).is_file())
+        self.assertIn(f"-r tooling/{SOCKET_LOCK}", scan)
+        for block in run_blocks(scan):
+            self.assertNotIn("${{", block)
 
     def test_trivy_scans_an_archive_without_daemon_or_runner_temp_access(self) -> None:
         self.assertNotIn("docker.sock", self.workflow)

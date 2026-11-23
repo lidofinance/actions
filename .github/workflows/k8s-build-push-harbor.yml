@@ -109,9 +109,23 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
 
+  socket:
+    name: Socket dependency scan
+    needs: validate
+    # Scans the dependency manifests of the validated commit before anything is
+    # built from it. Target dev only reports; every other target stops here when
+    # the Socket policy says Block or the scan did not complete.
+    uses: ./.github/workflows/socketdev-release-scan.yml
+    with:
+      source_sha: ${{ needs.validate.outputs.source_sha }}
+      source_branch: ${{ needs.validate.outputs.source_branch }}
+      target: ${{ inputs.target }}
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+
   publish:
     name: Build and publish image
-    needs: validate
+    needs: [validate, socket]
     runs-on: ubuntu-24.04
     environment: ${{ needs.validate.outputs.github_environment }}
     outputs:
