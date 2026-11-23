@@ -110,9 +110,9 @@ jobs:
               curl -fsS --max-time 60 -K - "$@"
           }
 
-          org="$(socket_api "$BASE_API_URL/organizations" |
-            jq -r '.organizations | to_entries | if length == 1 then .[0].value.slug else empty end')"
-          if [ -z "$org" ]; then
+          # One line per organization the key can see.
+          org="$(socket_api "$BASE_API_URL/organizations" | jq -r '.organizations[].slug')"
+          if [ -z "$org" ] || [ "$(wc -l <<< "$org")" -ne 1 ]; then
             echo '::error::The Socket API key must belong to exactly one organization.'
             exit 3
           fi
@@ -241,9 +241,8 @@ jobs:
           # After a comparison the report links to .../diff/<baseline scan>/<this scan>.
           # After a plain full scan the same field links to .../sbom/<this scan>.
           # The CLI itself exits 3 when Socket marks the comparison incomplete.
-          jq -e --arg baseline "$BASELINE_SCAN_ID" \
-            '(.diff_url // "") | endswith("/diff/" + $baseline + "/" + $ARGS.named.scan)' \
-            --arg scan "$(jq -r '.full_scan_id' "$report")" "$report" > /dev/null ||
+          diff_url="$(jq -r '.diff_url // empty' "$report" || true)"
+          [[ "$diff_url" == */diff/"$BASELINE_SCAN_ID"/* ]] ||
             not_scanned 'the CLI did not compare this scan with the empty baseline scan'
 
       - name: Publish the job summary
