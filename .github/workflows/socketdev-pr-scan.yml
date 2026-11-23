@@ -6,7 +6,7 @@
 #
 # Four things here are not obvious:
 #
-# 1. Empty baseline scan. Socket Python CLI 2.11.13 gates and comments only on
+# 1. Empty baseline scan. Socket Python CLI 2.13.2 gates and comments only on
 #    findings that are new between two scans. Each run compares the PR with its
 #    own empty scan, so every finding is new and the whole snapshot is reported.
 # 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on a reopened
@@ -37,6 +37,9 @@ concurrency:
 jobs:
   scan:
     name: Socket dependency security
+    # A run started by Dependabot gets Dependabot secrets only, so it has no
+    # Socket API key. The job is skipped, and a skipped job passes the ruleset.
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
     timeout-minutes: 12 # one scan takes 1-3 minutes; a stuck Socket request would otherwise hold the job
     defaults:
@@ -50,12 +53,12 @@ jobs:
       # Set explicitly so that no .env file in the PR can redirect the API key elsewhere.
       BASE_API_URL: https://api.socket.dev/v0
       # The reachability engine (Coana CLI). Update together with the CLI lock file.
-      REACH_ENGINE_VERSION: 15.14.2
+      REACH_ENGINE_VERSION: 15.15.2
     steps:
       - name: Fail on merge queue events (not supported yet)
         if: github.event_name == 'merge_group'
         run: |
-          echo '::error::Socket Python CLI 2.11.13 cannot scan merge_group events. Add merge queue support before enforcing this workflow on repositories that use a merge queue.'
+          echo '::error::Socket Python CLI 2.13.2 cannot scan merge_group events. Add merge queue support before enforcing this workflow on repositories that use a merge queue.'
           exit 2
 
       - name: Check out the scanner lock file from the central repository
