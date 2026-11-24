@@ -161,7 +161,7 @@ class WorkflowContractTests(unittest.TestCase):
         ).group()
         for setting in (
             "uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
-            "client-id: ${{ vars.VEX_APP_CLIENT_ID }}",
+            "client-id: ${{ secrets.VEX_APP_ID }}",
             "private-key: ${{ secrets.VEX_APP_PRIVATE_KEY }}",
             "owner: lidofinance", "repositories: vex", "permission-contents: read",
         ):

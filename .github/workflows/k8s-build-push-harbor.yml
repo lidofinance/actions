@@ -26,9 +26,12 @@ on:
         type: string
         default: Dockerfile
     secrets:
+      VEX_APP_ID:
+        description: Application ID for the read-only Lido VEX GitHub App
+        required: true
       VEX_APP_PRIVATE_KEY:
         description: PEM private key for the read-only Lido VEX GitHub App
-        required: false
+        required: true
     outputs:
       image_ref:
         description: Published image reference with tag
@@ -264,7 +267,7 @@ jobs:
         continue-on-error: ${{ inputs.target == 'dev' }}
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         with:
-          client-id: ${{ vars.VEX_APP_CLIENT_ID }}
+          client-id: ${{ secrets.VEX_APP_ID }}
           private-key: ${{ secrets.VEX_APP_PRIVATE_KEY }}
           owner: lidofinance
           repositories: vex

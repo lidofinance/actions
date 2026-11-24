@@ -304,7 +304,7 @@ Install a dedicated GitHub App on **only `lidofinance/vex`**, granting
 or Packages permissions, PAT, or OAuth client secret are required. SecOps manages
 the configuration and secret provisioning through Terraform:
 
-- Actions variable `VEX_APP_CLIENT_ID`: the App's Client ID (not secret).
+- Actions variable `VEX_APP_ID`: the App's Client ID (not secret).
 - Actions secret `VEX_APP_PRIVATE_KEY`: the complete PEM private key, including
   its header, footer, and newlines; not a filesystem path.
 
