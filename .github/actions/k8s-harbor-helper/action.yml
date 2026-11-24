@@ -56,7 +56,7 @@ outputs:
     description: Validated source commit
     value: ${{ steps.helper.outputs.source_sha }}
   vex_config:
-    description: Trusted VEX repository configuration from the pinned helper
+    description: Temporary mode-0600 VEX configuration with a repository-scoped token
     value: ${{ steps.helper.outputs.vex_config }}
 
 runs:

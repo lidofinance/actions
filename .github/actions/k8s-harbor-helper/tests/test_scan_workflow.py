@@ -6,6 +6,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from harbor_helper.trivy import prepare_trivy
 from test_workflow_contract import WORKFLOW, run_blocks
 
 
@@ -16,8 +17,10 @@ class TrivyScanWorkflowTests(unittest.TestCase):
         self.root = Path(self.temporary_directory.name)
         self.runner_temp = self.root / "runner temp"
         self.runner_temp.mkdir()
-        self.config = self.root / "trusted VEX config.yaml"
-        self.config.write_text("repositories: []\n")
+        self.token = "test-app-installation-token"
+        self.config = Path(prepare_trivy({
+            "RUNNER_TEMP": str(self.runner_temp), "VEX_REPO_TOKEN": self.token,
+        })["vex_config"])
         self.calls = self.root / "docker-calls.jsonl"
         binary_directory = self.root / "bin"
         binary_directory.mkdir()
@@ -39,11 +42,16 @@ class TrivyScanWorkflowTests(unittest.TestCase):
             if phase == "save":
                 Path(args[args.index("--output") + 1]).write_bytes(b"test image archive")
             else:
+                assert "GITHUB_TOKEN=" in args
+                assert "GITHUB_TOKEN" not in args
                 mounts = {}
                 for index, argument in enumerate(args):
                     if argument == "--volume":
                         source, target, *_ = args[index + 1].split(":")
                         mounts[target] = Path(source)
+                repositories = json.loads(mounts["/root/.trivy/vex/repository.yaml"].read_text())["repositories"]
+                assert repositories[0]["token"] == os.environ["EXPECTED_VEX_TOKEN"]
+                assert all("token" not in repo for repo in repositories[1:])
                 marker = mounts["/cache"] / "vex-downloaded"
                 if phase == "vex":
                     marker.touch()
@@ -61,22 +69,34 @@ class TrivyScanWorkflowTests(unittest.TestCase):
             "VEX_CONFIG": str(self.config),
             "DOCKER_CALLS": str(self.calls),
             "FAIL_PHASE": "",
+            "GITHUB_TOKEN": "unrelated-caller-token-must-not-be-forwarded",
+            "EXPECTED_VEX_TOKEN": self.token,
         }
         self.script = next(
             block for block in run_blocks(WORKFLOW.read_text())
             if "trivy_args=(" in block
         )
+        self.cleanup = next(
+            block for block in run_blocks(WORKFLOW.read_text())
+            if 'rm -f -- "$VEX_CONFIG"' in block
+        )
 
     def run_scan(self, **overrides: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["bash", "-c", self.script],
-            cwd=self.root,
-            env=self.environment | overrides,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
+        try:
+            return subprocess.run(
+                ["bash", "-c", self.script],
+                cwd=self.root,
+                env=self.environment | overrides,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        finally:
+            subprocess.run(
+                ["bash", "-c", self.cleanup], env=self.environment,
+                capture_output=True, text=True, timeout=10, check=True,
+            )
 
     def docker_calls(self) -> list[list[str]]:
         return [json.loads(line) for line in self.calls.read_text().splitlines()]
@@ -107,23 +127,33 @@ class TrivyScanWorkflowTests(unittest.TestCase):
         self.assertIn("--skip-vex-repo-update", scan)
         self.assertNotIn("local-build:123-1", scan)
         self.assertTrue((trivy_dir / "reports/trivy-report.json").is_file())
+        self.assertFalse(self.config.exists())
+
+    def test_vex_token_is_read_from_config_without_global_token_or_secret_arguments(self) -> None:
+        result = self.run_scan()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn(self.token, result.stdout + result.stderr + self.calls.read_text())
+        self.assertFalse(self.config.exists())
 
     def test_failed_export_does_not_start_trivy(self) -> None:
         result = self.run_scan(FAIL_PHASE="save")
         self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
         self.assertEqual(len(self.docker_calls()), 1)
+        self.assertFalse(self.config.exists())
         self.assertFalse((self.runner_temp / "trivy/reports/trivy-report.json").exists())
 
     def test_failed_vex_download_does_not_start_image_scan(self) -> None:
         result = self.run_scan(FAIL_PHASE="vex")
         self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
         self.assertEqual(len(self.docker_calls()), 2)
+        self.assertFalse(self.config.exists())
         self.assertFalse((self.runner_temp / "trivy/reports/trivy-report.json").exists())
 
     def test_failed_scan_is_not_reported_as_success(self) -> None:
         result = self.run_scan(FAIL_PHASE="scan")
         self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
         self.assertEqual(len(self.docker_calls()), 3)
+        self.assertFalse(self.config.exists())
         self.assertFalse((self.runner_temp / "trivy/reports/trivy-report.json").exists())
 
 
