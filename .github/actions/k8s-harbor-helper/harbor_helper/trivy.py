@@ -13,13 +13,13 @@ def prepare_trivy(environment: Mapping[str, str]) -> dict[str, str]:
     config = Path(__file__).resolve().parents[1] / "vex" / "repository.json"
     if not config.is_file():
         raise WorkflowError("The trusted Trivy VEX repository configuration is missing")
-    # JSON is valid YAML and avoids a YAML dependency in the trusted helper.
     repositories = json.loads(config.read_text())
     internal = next(repo for repo in repositories["repositories"] if repo["name"] == "internal")
     internal["token"] = required(environment, "VEX_REPO_TOKEN")
+    # Write a temporary VEX repository config containing the private access token.
+    # Use JSON so the helper needs no additional YAML library.
     content = json.dumps(repositories, indent=2) + "\n"
-    # NamedTemporaryFile creates a unique mode-0600 file outside the build context
-    # and outside the directories mounted writable into Trivy.
+    # Create a unique owner-only file. The workflow must delete it after use.
     with tempfile.NamedTemporaryFile(
         mode="w", prefix="trivy-vex-", suffix=".json",
         dir=required(environment, "RUNNER_TEMP"), delete=False,
