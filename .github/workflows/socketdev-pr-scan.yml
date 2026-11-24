@@ -1,0 +1,286 @@
+# Socket dependency scan for pull requests, selected from an organization ruleset.
+#
+# Scans every dependency manifest at the PR head (the whole branch, not only the
+# lines the PR changed), lists every Warn/Block finding in one PR comment, and
+# fails the job when the organization policy says Block.
+#
+# Four things here are not obvious:
+#
+# 1. Empty baseline scan. Socket Python CLI 2.11.13 gates and comments only on
+#    findings that are new between two scans. Each run compares the PR with its
+#    own empty scan, so every finding is new and the whole snapshot is reported.
+# 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on a reopened
+#    PR. Forcing one supported action keeps every PR event on the same scan path.
+# 3. Reachability with a fallback. The scan runs with --reach, which lowers
+#    findings the code cannot reach. If that attempt exits 3 without a report,
+#    the step scans again without --reach. A repository skips the analysis by
+#    setting the repository variable SOCKET_REACHABILITY to "off".
+# 4. merge_group fails on purpose: the CLI has no merge queue mode.
+#
+# Scan step exit codes: 0 = no Block (Warn is allowed), 1 = Block, 3 = Socket API
+# or runtime error.
+
+name: Socket
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: write # the CLI creates and updates its own PR comment
+
+concurrency:
+  group: socket-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Socket dependency security
+    runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
+    timeout-minutes: 12 # one scan takes 1-3 minutes; a stuck Socket request would otherwise hold the job
+    defaults:
+      run:
+        shell: bash
+    env:
+      SCAN_REPO: ${{ github.event.repository.name }}
+      SCAN_BRANCH: ${{ github.head_ref }}
+      SCAN_COMMIT: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      # Set explicitly so that no .env file in the PR can redirect the API key elsewhere.
+      BASE_API_URL: https://api.socket.dev/v0
+      # The reachability engine (Coana CLI). Update together with the CLI lock file.
+      REACH_ENGINE_VERSION: 15.14.2
+    steps:
+      - name: Fail on merge queue events (not supported yet)
+        if: github.event_name == 'merge_group'
+        run: |
+          echo '::error::Socket Python CLI 2.11.13 cannot scan merge_group events. Add merge queue support before enforcing this workflow on repositories that use a merge queue.'
+          exit 2
+
+      - name: Check out the scanner lock file from the central repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lidofinance/actions
+          ref: ${{ github.workflow_sha }} # same commit as this workflow file
+          path: tooling
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js for the reachability engine
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22' # the engine needs 22.13 or newer
+
+      - name: Install the hash-pinned Socket CLI
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: \
+            -r tooling/.github/tools/socket-python-cli.lock
+          socketcli --version
+          node --version
+          npm --version
+          uv --version
+
+      - name: Create the empty baseline scan
+        id: baseline
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event}"
+          mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
+          cd "$RUNNER_TEMP/socket-empty"
+
+          # The API accepts only known manifest names. An empty facts document is
+          # the placeholder the CLI itself uses for an empty scan.
+          echo '{"components": []}' > .socket.facts.json
+
+          # curl reads the API key from stdin, so the key never appears in a
+          # process argument list.
+          socket_api() {
+            printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
+              curl -fsS --max-time 60 -K - "$@"
+          }
+
+          org="$(socket_api "$BASE_API_URL/organizations" |
+            jq -r '.organizations | to_entries | if length == 1 then .[0].value.slug else empty end')"
+          if [ -z "$org" ]; then
+            echo '::error::The Socket API key must belong to exactly one organization.'
+            exit 3
+          fi
+
+          # tmp=true keeps this service scan out of the Socket dashboard. The CLI
+          # has no flag for it, so this one request goes to the API directly.
+          socket_api -X POST \
+            -F '.socket.facts.json=@.socket.facts.json' \
+            "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline&tmp=true" \
+            > "$RUNNER_TEMP/socket/baseline.json"
+
+          scan_id="$(jq -r '.id // empty' "$RUNNER_TEMP/socket/baseline.json")"
+          if [ -z "$scan_id" ]; then
+            echo '::error::Socket did not return the ID of the empty baseline scan.'
+            exit 3
+          fi
+          echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
+          echo "org=$org" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SCAN_COMMIT }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fail when the PR contains a reachability facts file
+        # The CLI uploads every .socket.facts.json it finds, and Socket lowers
+        # findings based on that data. Only this workflow may produce that file,
+        # so one committed to the repository stops the job before the scan.
+        working-directory: candidate
+        run: |
+          found="$(find . -path ./.git -prune -o \( -type f -o -type l \) -name '.socket.facts.json*' -print)"
+          [ -z "$found" ] && exit 0
+          while IFS= read -r file; do
+            echo "::error::Reachability facts file committed to the repository: $file"
+          done <<< "$found"
+          echo '::error::Not scanned. Please contact SecOps to investigate the issue.'
+          exit 2
+
+      - name: Scan the PR snapshot and update the PR comment
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          GH_API_TOKEN: ${{ github.token }}
+          EVENT_ACTION: synchronize
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+          REACHABILITY: ${{ vars.SOCKET_REACHABILITY }}
+          # The reachability engine downloads packages with npm. It must never run
+          # their install scripts in this step, which holds both tokens.
+          NPM_CONFIG_IGNORE_SCRIPTS: 'true'
+        run: |
+          # --base-scan-id        compare with the empty baseline: every finding is new
+          # --ignore-commit-files scan even when the PR touches no manifest file
+          # --strict-blocking     fail on any Block, not only on new ones
+          # --disable-ignore      "@SocketSecurity ignore" PR comments have no effect
+          # --disable-overview    one security comment, no second overview comment
+          # --reach               analyse the code and lower findings that are not reachable
+          # --reach-disable-analytics  do not send analysis statistics to Socket
+          # --reach-version       the engine version; the same one this CLI release pins
+          #
+          # The reachability flags are kept in reach_flags, because the second attempt
+          # below runs the same command without them.
+          reach_flags=(
+            --reach
+            --reach-disable-analytics
+            --reach-version "$REACH_ENGINE_VERSION"
+          )
+          if [ "${REACHABILITY,,}" = off ]; then # any letter case
+            echo '::notice::Reachability analysis is switched off by the repository variable SOCKET_REACHABILITY.'
+            reach_flags=()
+          fi
+          scan() {
+            socketcli --scm github \
+              --owner "$GITHUB_REPOSITORY_OWNER" \
+              --repo "$SCAN_REPO" \
+              --branch "$SCAN_BRANCH" \
+              --commit-sha "$SCAN_COMMIT" \
+              --pr-number "$PR_NUMBER" \
+              --target-path . \
+              --base-scan-id "$BASELINE_SCAN_ID" \
+              --ignore-commit-files \
+              --strict-blocking \
+              --disable-ignore \
+              --disable-overview \
+              --json-file "$RUNNER_TEMP/socket/report.json" \
+              --summary-file "$RUNNER_TEMP/socket/summary.txt" \
+              "${reach_flags[@]}"
+          }
+
+          status=0
+          scan || status=$?
+
+          # Exit 3 without a report: the first attempt failed before it assessed
+          # anything, most often in the reachability analysis. Scan again without it.
+          if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ] && [ "${#reach_flags[@]}" -gt 0 ]; then
+            echo '::warning::The first scan attempt produced no report. Scanning again without reachability analysis.'
+            touch "$RUNNER_TEMP/socket/reachability-fallback"
+            # Drop what the failed analysis left behind, so the second scan does not upload it.
+            find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
+            reach_flags=()
+            status=0
+            scan || status=$?
+          fi
+          exit "$status"
+
+      - name: Confirm that Socket compared the scan with the empty baseline
+        # A green scan step is not enough: the CLI exits 0 when it skips the
+        # comparison. Runs after a Block failure too, but not after a cancel.
+        if: github.event_name == 'pull_request' && !cancelled()
+        env:
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+          SOCKET_ORG: ${{ steps.baseline.outputs.org }}
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          report="$RUNNER_TEMP/socket/report.json"
+          not_scanned() {
+            echo "::error::Treat this PR as not scanned: $1."
+            exit 3
+          }
+
+          # No report: the CLI left before it scanned, which it does with exit 0.
+          # .scan_failed is not checked: the CLI sets it to true for a Block finding.
+          [ -s "$report" ] ||
+            not_scanned 'the CLI wrote no report'
+
+          # Ask Socket for the comparison itself. The CLI report does not say
+          # whether a comparison was made or whether it was complete: a plain
+          # full scan also leaves a report, and the CLI never blocks on one.
+          # Both answers are kept next to the report and uploaded with it. curl
+          # retries timeouts and 408/429/5xx answers, not 401/403/404.
+          socket_api() {
+            printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
+              curl -fsS --max-time 60 --retry 2 --retry-delay 5 -K - "$@"
+          }
+          head_scan="$(jq -r '.full_scan_id' "$report")"
+          comparisons="$RUNNER_TEMP/socket/comparison-list.json"
+          comparison="$RUNNER_TEMP/socket/comparison.json"
+
+          socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans?before_full_scan_id=$BASELINE_SCAN_ID&after_full_scan_id=$head_scan" > "$comparisons" ||
+            not_scanned 'Socket did not list the comparison'
+          comparison_id="$(jq -r 'if (.results | length) == 1 then .results[0].id else empty end' "$comparisons")"
+          [ -n "$comparison_id" ] ||
+            not_scanned 'Socket has no single comparison of this scan with the empty baseline scan'
+          socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans/$comparison_id?if_cached=true" > "$comparison" ||
+            not_scanned 'Socket did not return the comparison'
+          jq -e '.diff_scan.incomplete == false' "$comparison" > /dev/null ||
+            not_scanned 'Socket did not confirm that the comparison is complete'
+
+      - name: Publish the job summary
+        if: always()
+        run: |
+          {
+            echo '## Socket dependency scan'
+            if [ -e "$RUNNER_TEMP/socket/reachability-fallback" ]; then
+              echo 'The scan with reachability analysis produced no report. These findings are reported without it. The reason is in the log of the scan step.'
+            fi
+            if [ -s "$RUNNER_TEMP/socket/summary.txt" ]; then
+              echo '```text'
+              # GitHub rejects step summaries above 1 MiB.
+              head -c 900000 "$RUNNER_TEMP/socket/summary.txt"
+              echo
+              echo '```'
+            else
+              echo 'No completed assessment. See the failed step.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: socket-report
+          path: ${{ runner.temp }}/socket/
+          retention-days: 7

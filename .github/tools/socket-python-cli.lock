@@ -1,0 +1,46 @@
+# Socket Python CLI 2.11.13 and dependencies; CPython 3.12 / Linux x86_64.
+# Install with pip --require-hashes --only-binary=:all:.
+
+socketsecurity==2.11.13 \
+    --hash=sha256:7e5192cf9998157051ce06b39772642a546a8ea9eb290bcc776a9f2167245f0b
+beautifulsoup4==4.15.0 \
+    --hash=sha256:d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9
+brotli==1.2.1 \
+    --hash=sha256:4b9dd0173ca5e01d1eb307d3c184fe8c09bdc168ede560889b1018d216d38c61
+certifi==2026.10.23 \
+    --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
+charset-normalizer==3.5.2 \
+    --hash=sha256:3d31298449090ab8d47b7b1b2a555ff73cac7ed438a08b7ac160980c7ebed649
+gitdb==4.0.12 \
+    --hash=sha256:67073e15955400952c6565cc3e707c554a4eea2e428946f7a4c162fab9bd9bcf
+GitPython==3.2.1 \
+    --hash=sha256:d66b0832aa8755c1a84892937282df0befb16c97e5a64aeebd68be9c5e323f53
+idna==3.20 \
+    --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+Markdown==3.11.2 \
+    --hash=sha256:f80390747a2a0ff2ba54da074ce4f862f72a6685f608cd2637b646a6d83993f5
+mdutils==1.8.1 \
+    --hash=sha256:3d62d0a4d19fcd68d1daf956d1832f4a598663c73022bd95b09fae69c994b5ac
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+prettytable==3.18.0 \
+    --hash=sha256:b3346e0e6f79180833aebaac088ae926340586cf6d7d991b9eb125b65f72313a
+python-dotenv==1.2.4 \
+    --hash=sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc
+requests==2.34.2 \
+    --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0
+smmap==5.0.3 \
+    --hash=sha256:c106e05d5a61449cf6ba9a1e650227ecfb141590d2a98412103ff35d89fc7b2f
+socketdev==3.6.2 \
+    --hash=sha256:ea94b2da1bdb89f3b70209b606f3abe5c609f66549c1deb160cf18f58e0c2e48
+soupsieve==4.1 \
+    --hash=sha256:e4d667b3974ce6e038e7390486b8093369854a1d345ffdd4c121dfc4a782e809
+typing_extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+urllib3==2.8.0 \
+    --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
+wcwidth==0.9.4 \
+    --hash=sha256:b185c8b927b23af2721be1783499d1cfa5c028b098b0858951b4ae224477f1c2
+# Needed by the reachability engine (socketcli --reach).
+uv==0.13.7 \
+    --hash=sha256:2c9bdc4a872b60a93c5f26c0791089ea11585a4f9d3b3c017d78eb8487505e25

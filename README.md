@@ -165,7 +165,10 @@ it does not log Docker in or save Harbor credentials in Docker configuration.
 The same release checks run again after Harbor login, immediately before push.
 
 Before building, it attempts a separate login to the fixed `dhi.io` registry
-using secrets `DHI_USERNAME` and `DHI_TOKEN`. Use a read-only DHI access token,
+and to Docker Hub (`docker.io`) for Lido's paid DHI images, such as
+`lidofinance/dhi-node`, used for subscription-backed security updates,
+using the same secrets `DHI_USERNAME` and `DHI_TOKEN`. Use a read-only token
+with pull access to both DHI and the required Lido DHI repositories on Docker Hub,
 available to the publish job through repository/organization secrets or its
 selected Environment. Repository and Environment secrets are managed through
 Terraform code by the SecOps team; request credential changes through that
@@ -173,7 +176,7 @@ process rather than configuring secrets manually. Neither value is passed as a
 Docker build argument or copied into the build context. BuildKit uses DHI
 authentication to pull bases; Harbor credentials remain unavailable to the build.
 
-DHI login is best-effort during rollout, so missing or invalid DHI credentials
+Both logins are best-effort during rollout, so missing or invalid DHI credentials
 do not prevent non-DHI builds. A DHI base that requires authentication can still
 fail the actual Docker build when credentials are absent or invalid.
 
