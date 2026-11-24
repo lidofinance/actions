@@ -299,6 +299,22 @@ Findings remaining after VEX filtering are handled as follows:
 | `dev` | Warning; publication continues | Warning; publication continues |
 | `staging`, `prod`, `critical` | Publication blocked | Warning; publication continues |
 
+The workflow can leave application libraries to the `socket` job. The switch is
+`TRIVY_APPLICATION_LIBRARIES_REPORT_ONLY` in the workflow file. It is `"false"`
+today, so every CRITICAL finding blocks. Switching it on is a separate decision.
+
+With `"true"`, application libraries are the language packages inside the
+working directory of the image (`WORKDIR`). Trivy reports their findings and
+does not block on them: the `socket` job gates the same packages from the lock
+file before the build. Trivy still blocks on CRITICAL findings in OS packages,
+in libraries outside the working directory (for example the `npm` of a Node.js
+base image or Python packages in `/usr/local/lib`), and in the Go standard
+library. When the image sets no working directory, every library blocks.
+
+A copy of a library vendored inside another package lies in the working
+directory too, although no lock file lists it. With the switch on, neither gate
+blocks on it; the Trivy report still shows it.
+
 Findings without an available fix are also reported. The JSON report is uploaded
 before summarizing. VEX-suppressed findings are retained separately through
 `--show-suppressed` and excluded from the active severity counts.

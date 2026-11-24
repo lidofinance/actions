@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/k8s-build-push-harbor.yml"
-HELPER_SHA = "c19bf7880245f2f15d387279236bebb0eb201349"
+HELPER_SHA = "c6c1b1260fdaf7a989e4837e9b9e4f5475d20581"
 HELPER_REFERENCE = "lidofinance/actions/.github/actions/k8s-harbor-helper"
 SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
 SOCKET_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/socketdev-release-scan.yml"
@@ -165,6 +165,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("TARGET: ${{ inputs.target }}", gate.group())
         self.assertNotIn("continue-on-error:", gate.group())
         self.assertIn("TRIVY_REPORT_ONLY: ${{ inputs.target == 'dev' }}", gate.group())
+        self.assertIn('TRIVY_APPLICATION_LIBRARIES_REPORT_ONLY: "false"', gate.group())
+        # Application libraries are left to Socket only while its job gates publish.
+        self.assertIn("    needs: [validate, socket]\n", self.workflow)
         self.assertIn("TRIVY_SCAN_OUTCOME: ${{ steps.trivy-scan.outcome }}", gate.group())
         self.assertNotIn("if:", gate.group())
 
