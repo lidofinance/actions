@@ -112,9 +112,7 @@ jobs:
   socket:
     name: Socket dependency scan
     needs: validate
-    # Scans the dependency manifests of the validated commit before anything is
-    # built from it. Target dev only reports; every other target stops here when
-    # the Socket policy says Block or the scan did not complete.
+    # Scans the dependency manifests of the validated commit before the build.
     uses: ./.github/workflows/socketdev-release-scan.yml
     with:
       source_sha: ${{ needs.validate.outputs.source_sha }}
@@ -310,10 +308,6 @@ jobs:
 
           docker run "${trivy_args[@]}" "$TRIVY_IMAGE" vex repo download
 
-          # --pkg-types os,library: Trivy is the only scan of the image itself.
-          # The "socket" job reads lock files, so it does not cover the packages
-          # of the base image, the Go standard library, or copies vendored in
-          # packages.
           docker run "${trivy_args[@]}" \
             --volume "$trivy_dir/image.tar:/input/image.tar:ro" \
             "$TRIVY_IMAGE" image \
@@ -344,10 +338,7 @@ jobs:
         env:
           TARGET: ${{ inputs.target }}
           TRIVY_REPORT_ONLY: ${{ inputs.target == 'dev' }}
-          # "false": Trivy blocks on every CRITICAL finding, application libraries
-          # included. "true" leaves the libraries of the application to the
-          # "socket" job; Trivy then still blocks on OS packages and on the
-          # libraries of the base image. Switching it on is a separate decision.
+          # "true" makes CRITICAL findings in application libraries report-only.
           TRIVY_APPLICATION_LIBRARIES_REPORT_ONLY: "false"
           TRIVY_SCAN_OUTCOME: ${{ steps.trivy-scan.outcome }}
           TRIVY_REPORT: ${{ runner.temp }}/trivy/reports/trivy-report.json

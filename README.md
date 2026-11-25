@@ -299,21 +299,9 @@ Findings remaining after VEX filtering are handled as follows:
 | `dev` | Warning; publication continues | Warning; publication continues |
 | `staging`, `prod`, `critical` | Publication blocked | Warning; publication continues |
 
-The workflow can leave application libraries to the `socket` job. The switch is
-`TRIVY_APPLICATION_LIBRARIES_REPORT_ONLY` in the workflow file. It is `"false"`
-today, so every CRITICAL finding blocks. Switching it on is a separate decision.
-
-With `"true"`, application libraries are the language packages inside the
-working directory of the image (`WORKDIR`). Trivy reports their findings and
-does not block on them: the `socket` job gates the same packages from the lock
-file before the build. Trivy still blocks on CRITICAL findings in OS packages,
-in libraries outside the working directory (for example the `npm` of a Node.js
-base image or Python packages in `/usr/local/lib`), and in the Go standard
-library. When the image sets no working directory, every library blocks.
-
-A copy of a library vendored inside another package lies in the working
-directory too, although no lock file lists it. With the switch on, neither gate
-blocks on it; the Trivy report still shows it.
+`TRIVY_APPLICATION_LIBRARIES_REPORT_ONLY` in the workflow file is `"false"`:
+every CRITICAL finding blocks. With `"true"`, CRITICAL findings in libraries
+inside the image `WORKDIR` are only reported.
 
 Findings without an available fix are also reported. The JSON report is uploaded
 before summarizing. VEX-suppressed findings are retained separately through
@@ -342,31 +330,14 @@ fatal.
 #### Dependency scanning (Socket)
 
 Before the image is built, the `socket` job scans the dependency manifests of
-the validated commit with Socket. It calls the reusable workflow
-`socketdev-release-scan.yml` from the same commit of this repository. `publish`
-starts only after it.
+the validated commit (`socketdev-release-scan.yml`). `publish` starts only
+after it. The job needs the organization secret `SOCKET_SECURITY_API_KEY`.
 
-The job is separate from `publish` on purpose: the scan checks out the
-application code and runs the Socket reachability engine on it, so it gets the
-Socket API key and nothing else. It has no GitHub Environment and no Harbor or
-DHI credentials.
-
-| Verdict | Meaning | `dev` | `staging`, `prod`, `critical` |
-| --- | --- | --- | --- |
-| `pass` | Scanned; the Socket policy has no Block finding | Publication continues | Publication continues |
-| `block` | The Socket policy says Block | Warning; publication continues | Publication blocked |
-| `not-scanned` | No completed assessment: missing API key, Socket API error, or a scan the CLI did not compare | Warning; publication continues | Publication blocked |
-
-Warn findings never block. They are listed in the job summary, and the JSON
-report is stored as a workflow artifact for 30 days.
-
-The scan reads `SOCKET_SECURITY_API_KEY`, an organization secret that the
-caller passes with `secrets: inherit`. A repository can switch reachability
-analysis off with the repository variable `SOCKET_REACHABILITY=off`.
-
-Socket reads manifests and lock files, not the image. It does not see OS
-packages, the base image, or libraries that are not in a lock file; Trivy
-covers those.
+| Verdict | `dev` | `staging`, `prod`, `critical` |
+| --- | --- | --- |
+| `pass` | Publication continues | Publication continues |
+| `block` | Warning; publication continues | Publication blocked |
+| `not-scanned` | Warning; publication continues | Publication blocked |
 
 #### Release preflight and partial-failure recovery
 
