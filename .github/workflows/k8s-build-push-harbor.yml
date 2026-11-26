@@ -296,7 +296,7 @@ jobs:
           RUNNER_TEMP: ${{ runner.temp }}
           VEX_REPO_TOKEN: ${{ steps.vex-token.outputs.token }}
 
-      - name: Scan Docker image from temporary HTTPS registry with Trivy
+      - name: Scan Docker image from harbor-core:80 with Trivy
         id: trivy-scan
         if: ${{ steps.trivy-config.outcome == 'success' }}
         continue-on-error: ${{ inputs.target == 'dev' }}
@@ -317,24 +317,35 @@ jobs:
           mkdir -m 700 "$state"
           mkdir -m 700 "$state/certs" "$state/docker-config"
 
-          # Preserve the Harbor repository path and use the internal Harbor
-          # authority for the scan. The runner pushes through a loopback port.
+          # Keep the Harbor project and image name, but use one canonical host.
           repository="${REMOTE_NAME#*/}"
           if [[ "$repository" == "$REMOTE_NAME" || -z "$repository" ]]; then
             echo "::error::Invalid Harbor repository name"
             exit 1
           fi
+          if [[ "$PROD_HOST" != 'harbor-core:80' ]]; then
+            echo "::error::Unexpected registry authority: $PROD_HOST"
+            exit 1
+          fi
           registry_host="${PROD_HOST%:*}"
           registry_port="${PROD_HOST##*:}"
           registry_name="$PROD_HOST/$repository"
-          push_host="127.0.0.1:5000"
-          registry_ref="$push_host/$repository:$IMAGE_TAG"
+          expected_vex_key="pkg:oci/${repository##*/}?repository_url=${registry_name//\//%2F}"
+          echo "Expected VEX image index PURL: $expected_vex_key"
+          registry_ref="${registry_name}:${IMAGE_TAG}"
           registry_container="trivy-registry-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           registry_network="${registry_container}-net"
-          ca_dir="/etc/docker/certs.d/$push_host"
+          ca_dir="/etc/docker/certs.d/$PROD_HOST"
           ca_file="$ca_dir/trivy-local-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.crt"
 
-          # Do not overwrite a pre-existing Docker CA or local image tag.
+          # Do not shadow a pre-existing hosts entry or overwrite a trusted CA.
+          if awk -v host="$registry_host" '{
+            sub(/#.*/, "")
+            for (i = 2; i <= NF; i++) if (tolower($i) == tolower(host)) found = 1
+          } END { exit !found }' /etc/hosts; then
+            echo "::error::Registry hostname already has an /etc/hosts entry"
+            exit 1
+          fi
           if sudo test -e "$ca_file" || sudo test -L "$ca_file"; then
             echo "::error::Temporary Docker CA path already exists"
             exit 1
@@ -343,7 +354,8 @@ jobs:
             echo "::error::Temporary registry tag already exists"
             exit 1
           fi
-          # Use only the local Docker daemon without a daemon proxy.
+          # This workflow uses a local Docker daemon on a GitHub-hosted runner.
+          # Refuse a daemon proxy rather than risk a push to the real registry.
           if [[ -n "$(docker info --format '{{.HTTPProxy}}{{.HTTPSProxy}}')" ]]; then
             echo "::error::Docker daemon proxy is configured; cannot guarantee a local-only push"
             exit 1
@@ -358,14 +370,15 @@ jobs:
             --env GITHUB_TOKEN=
           )
 
-          # Download the trusted VEX repository and registry image first.
+          # Download the trusted VEX repository and registry image before
+          # temporarily changing the Harbor hostname on the runner.
           docker run "${trivy_args[@]}" "$TRIVY_IMAGE" vex repo download
           docker pull "$REGISTRY_IMAGE"
 
-          # TLS is used even on internal port 80. Cover both access paths.
+          # TLS uses the DNS hostname, not the host:port authority.
           openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
             -subj "/CN=$registry_host" \
-            -addext "subjectAltName=DNS:$registry_host,IP:127.0.0.1" \
+            -addext "subjectAltName=DNS:$registry_host" \
             -keyout "$state/certs/tls.key" -out "$state/certs/tls.crt" 2>/dev/null
           # Trivy also needs public roots for vulnerability DB downloads.
           cat /etc/ssl/certs/ca-certificates.crt "$state/certs/tls.crt" \
@@ -378,7 +391,7 @@ jobs:
           docker create --name "$registry_container" \
             --network "$network_id" \
             --network-alias "$registry_host" \
-            --publish "$push_host:$registry_port" \
+            --publish "127.0.0.1:$registry_port:$registry_port" \
             --volume "$state/certs:/certs:ro" \
             --env "REGISTRY_HTTP_ADDR=0.0.0.0:$registry_port" \
             --env REGISTRY_HTTP_TLS_CERTIFICATE=/certs/tls.crt \
@@ -389,12 +402,13 @@ jobs:
 
           registry_curl=(
             --noproxy '*'
+            --resolve "$registry_host:$registry_port:127.0.0.1"
             --cacert "$state/certs/tls.crt"
             --fail --silent --show-error --max-time 5
           )
           ready=false
           for ((i = 0; i < 30; i++)); do
-            if curl "${registry_curl[@]}" "https://$push_host/v2/" >/dev/null 2>&1; then
+            if curl "${registry_curl[@]}" "https://$PROD_HOST/v2/" >/dev/null 2>&1; then
               ready=true
               break
             fi
@@ -405,7 +419,15 @@ jobs:
             exit 1
           fi
 
-          # Scope Docker's temporary trust to the loopback push endpoint.
+          # The Docker daemon must resolve the canonical hostname locally.
+          cp /etc/hosts "$state/hosts.backup.tmp"
+          mv -- "$state/hosts.backup.tmp" "$state/hosts.original"
+          printf '\n127.0.0.1 %s # temporary Trivy registry\n' "$registry_host" | \
+            sudo tee -a /etc/hosts >/dev/null
+          if [[ "$(getent ahosts "$registry_host" | awk '{print $1}' | sort -u)" != 127.0.0.1 ]]; then
+            echo "::error::Registry hostname does not resolve exclusively to loopback"
+            exit 1
+          fi
           if ! sudo test -d "$ca_dir"; then
             touch "$state/ca-dir-created"
             sudo mkdir -p "$ca_dir"
@@ -414,8 +436,9 @@ jobs:
           sudo install -m 0644 "$state/certs/tls.crt" "$ca_file"
 
           # Use an isolated anonymous Docker config for the temporary push.
-          printf '{"auths":{"%s":{}}}\n' "$push_host" > "$state/docker-config/config.json"
+          printf '{"auths":{"%s":{}}}\n' "$PROD_HOST" > "$state/docker-config/config.json"
           printf '%s\n' "$registry_ref" > "$state/registry-ref"
+          echo "Pushing image to temporary registry: $registry_ref"
           docker tag "$LOCAL_IMAGE" "$registry_ref"
           docker --config "$state/docker-config" push "$registry_ref" 2>&1 | \
             tee "$trivy_dir/registry-push.log"
@@ -434,7 +457,7 @@ jobs:
           # Confirm the manifest exists in the loopback registry, not Harbor.
           local_digest="$(curl "${registry_curl[@]}" --head \
             --header 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
-            "https://$push_host/v2/$repository/manifests/$digest" | \
+            "https://$PROD_HOST/v2/$repository/manifests/$digest" | \
             awk 'tolower($1) == "docker-content-digest:" { sub(/\r$/, "", $2); print $2 }')"
           if [[ "$local_digest" != "$digest" ]]; then
             echo "::error::Pushed manifest could not be verified in the local registry"
@@ -444,16 +467,19 @@ jobs:
           scan_ref="${registry_name}@${digest}"
           echo "Scanning registry image: $scan_ref"
 
-          # Remove Docker's temporary CA as soon as the push is finished.
-          # The always() cleanup below also handles failures before this point.
+          # Restore the runner's real hostname resolution and remove the
+          # Docker CA as soon as the push is finished. The always() cleanup
+          # below repeats these operations if the scan fails earlier.
+          sudo tee /etc/hosts < "$state/hosts.original" >/dev/null
+          cmp -s "$state/hosts.original" /etc/hosts
           sudo rm -f -- "$ca_file"
           if [[ -f "$state/ca-dir-created" ]]; then
             sudo rmdir -- "$ca_dir"
           fi
-          rm -f -- "$state/ca-managed" "$state/ca-dir-created"
+          rm -f -- "$state/hosts.original" "$state/ca-managed" "$state/ca-dir-created"
 
-          # Resolve harbor-core only inside the Trivy container. The actual
-          # scan reference retains the explicit :80 for OCI PURL generation.
+          # Containers do not inherit the runner's /etc/hosts. Map PROD_HOST
+          # directly to the registry's private bridge IP inside Trivy only.
           registry_ip="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$registry_id")"
           if [[ ! "$registry_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Could not determine temporary registry IP"
@@ -479,40 +505,69 @@ jobs:
             --scanners vuln \
             "$scan_ref"
 
-          # Verify that the report identifies the expected registry manifest.
-          jq -e --arg ref "$scan_ref" \
-            '.Metadata.RepoDigests[0] == $ref' \
-            "$trivy_dir/reports/trivy-report.json" >/dev/null
+          # A successful scan must have the intended product identity, even
+          # for dev (where scanner errors are normally report-only).
+          echo "identity_check_required=true" >> "$GITHUB_OUTPUT"
+          report="$trivy_dir/reports/trivy-report.json"
+          echo "Trivy RepoDigests: $(jq -c '.Metadata.RepoDigests' "$report")"
+          # parseOCI() uses the first RepoDigest, not just any matching digest.
+          if ! jq -e --arg ref "$scan_ref" \
+            '.ArtifactName == $ref and .Metadata.RepoDigests[0] == $ref' \
+            "$report" >/dev/null; then
+            echo "::error::Trivy scanned a different registry reference; expected $scan_ref"
+            exit 1
+          fi
 
-          # Print the OCI PURL generated by Trivy from the scan report.
-          if image_purl="$(
+          # Extract the actual OCI PURL with the same pinned Trivy binary.
+          image_purl="$(
             docker run --rm --network none \
               --volume "$trivy_dir/reports:/reports:ro" \
               "$TRIVY_IMAGE" convert --format cyclonedx \
               /reports/trivy-report.json |
               jq -er '.metadata.component.purl | strings | select(startswith("pkg:oci/"))'
-          )"; then
-            echo "Trivy image PURL: $image_purl"
-            expected_repo_url="${registry_name//\//%2F}"
-            if [[ "$image_purl" != *"repository_url=$expected_repo_url" ]]; then
-              echo "::error::Trivy generated an unexpected OCI repository identity"
-              exit 1
-            fi
-          else
-            echo "::warning::Could not extract OCI PURL from Trivy report"
+          )"
+          echo "Trivy image PURL: $image_purl"
+          if [[ "$image_purl" != "pkg:oci/${repository##*/}@$digest?"* ]]; then
+            echo "::error::Trivy image PURL has an unexpected name or manifest digest"
+            exit 1
           fi
 
-      - name: Remove temporary HTTPS registry and Docker CA
+          # Reproduce Trivy v0.76.2 RepositorySet.NotAffected() normalization:
+          # remove the version and every qualifier except repository_url.
+          purl_name="${image_purl%%@*}"
+          purl_query="${image_purl#*\?}"
+          IFS='&' read -r -a purl_qualifiers <<< "$purl_query"
+          repository_qualifier=""
+          for qualifier in "${purl_qualifiers[@]}"; do
+            if [[ "$qualifier" == repository_url=* ]]; then
+              repository_qualifier="$qualifier"
+              break
+            fi
+          done
+          actual_vex_key="$purl_name?$repository_qualifier"
+          echo "Trivy VEX image index PURL: $actual_vex_key"
+          if [[ "$actual_vex_key" != "$expected_vex_key" ]]; then
+            echo "::error::Unexpected VEX image index PURL; expected $expected_vex_key"
+            exit 1
+          fi
+          echo "identity_verified=true" >> "$GITHUB_OUTPUT"
+
+      - name: Remove temporary HTTPS registry and restore runner configuration
         if: ${{ always() }}
         shell: bash
         run: |
           set -uo pipefail
           state="$RUNNER_TEMP/trivy/registry-state"
-          ca_dir="/etc/docker/certs.d/127.0.0.1:5000"
+          ca_dir="/etc/docker/certs.d/$PROD_HOST"
           ca_file="$ca_dir/trivy-local-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.crt"
           cleanup_status=0
 
           if [[ -d "$state" ]]; then
+            # Restore the original host configuration even on scan failure.
+            if [[ -f "$state/hosts.original" ]]; then
+              sudo tee /etc/hosts < "$state/hosts.original" >/dev/null || cleanup_status=1
+              cmp -s "$state/hosts.original" /etc/hosts || cleanup_status=1
+            fi
             if [[ -f "$state/ca-managed" ]]; then
               sudo rm -f -- "$ca_file" || cleanup_status=1
               if sudo test -e "$ca_file" || sudo test -L "$ca_file"; then
@@ -559,6 +614,13 @@ jobs:
           path: ${{ runner.temp }}/trivy/reports/trivy-report.json
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Enforce canonical Trivy image identity
+        if: ${{ always() && !cancelled() && steps.trivy-scan.outputs.identity_check_required == 'true' && steps.trivy-scan.outputs.identity_verified != 'true' }}
+        shell: bash
+        run: |
+          echo "::error::Trivy image identity was not verified; refusing Harbor publication"
+          exit 1
 
       - name: Summarize vulnerability report and enforce policy
         uses: lidofinance/actions/.github/actions/k8s-harbor-helper@7ffc0136e460b5c66d8c9f84b2f2a89dedd0366a
