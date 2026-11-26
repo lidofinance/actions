@@ -292,13 +292,16 @@ jobs:
           RUNNER_TEMP: ${{ runner.temp }}
           VEX_REPO_TOKEN: ${{ steps.vex-token.outputs.token }}
 
-      - name: Scan Docker image with Trivy
+      - name: Scan Docker image from temporary registry with Trivy
         id: trivy-scan
         if: ${{ steps.trivy-config.outcome == 'success' }}
         continue-on-error: ${{ inputs.target == 'dev' }}
         shell: bash
         env:
-          IMAGE_REF: local-build:${{ github.run_id }}-${{ github.run_attempt }}
+          LOCAL_IMAGE: local-build:${{ github.run_id }}-${{ github.run_attempt }}
+          REMOTE_NAME: ${{ needs.validate.outputs.remote_name }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+          REGISTRY_IMAGE: docker.io/library/registry@sha256:3d527cee870ddd0fc8a31f99b2fdfb6451801a8dd4f5a92c1ec36dae24c14274  # 3.1.1, linux/amd64
           TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb  # v0.76.2
           VEX_CONFIG: ${{ steps.trivy-config.outputs.vex_config }}
         run: |
@@ -306,7 +309,61 @@ jobs:
 
           trivy_dir="$RUNNER_TEMP/trivy"
           mkdir -p "$trivy_dir/cache" "$trivy_dir/reports"
-          docker save --output "$trivy_dir/image.tar" "$IMAGE_REF"
+
+          # Preserve the final Harbor repository path, but use a local registry.
+          repository="${REMOTE_NAME#*/}"
+          if [[ "$repository" == "$REMOTE_NAME" || -z "$repository" ]]; then
+            echo "::error::Invalid Harbor repository name"
+            exit 1
+          fi
+
+          registry_name="localhost:5000/$repository"
+          registry_ref="${registry_name}:${IMAGE_TAG}"
+          registry_container="trivy-registry-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          cleanup_registry() {
+            docker rm -fv "$registry_container" >/dev/null 2>&1 || true
+            docker image rm "$registry_ref" >/dev/null 2>&1 || true
+          }
+          trap cleanup_registry EXIT
+
+          # Start the registry only after the application build has completed.
+          docker run --detach --rm \
+            --name "$registry_container" \
+            --publish 127.0.0.1:5000:5000 \
+            "$REGISTRY_IMAGE" >/dev/null
+
+          ready=false
+          for ((i = 0; i < 30; i++)); do
+            if curl --noproxy '*' --fail --silent --max-time 2 \
+              http://127.0.0.1:5000/v2/ >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            echo "::error::Temporary registry did not become ready"
+            exit 1
+          fi
+
+          docker tag "$LOCAL_IMAGE" "$registry_ref"
+          docker push "$registry_ref" 2>&1 | tee "$trivy_dir/registry-push.log"
+
+          # Pin the scan to the manifest digest returned by the push.
+          digest="$(awk '{
+            for (i = 1; i < NF; i++) {
+              if ($i == "digest:" && $(i+1) ~ /^sha256:/) d = $(i+1)
+            }
+          } END { print d }' "$trivy_dir/registry-push.log")"
+
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not determine pushed image manifest digest"
+            exit 1
+          fi
+
+          scan_ref="${registry_name}@${digest}"
+          echo "Scanning registry image: $scan_ref"
 
           trivy_args=(
             --rm
@@ -319,10 +376,12 @@ jobs:
 
           docker run "${trivy_args[@]}" "$TRIVY_IMAGE" vex repo download
 
+          # Share only the registry container's network namespace.
+          # localhost:5000 now resolves to the registry from inside Trivy.
           docker run "${trivy_args[@]}" \
-            --volume "$trivy_dir/image.tar:/input/image.tar:ro" \
+            --network "container:$registry_container" \
             "$TRIVY_IMAGE" image \
-            --input /input/image.tar \
+            --image-src remote \
             --vex repo \
             --skip-vex-repo-update \
             --show-suppressed \
@@ -331,7 +390,13 @@ jobs:
             --exit-code 0 \
             --pkg-types os,library \
             --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
-            --scanners vuln
+            --scanners vuln \
+            "$scan_ref"
+
+          # Verify that the report identifies the expected registry manifest.
+          jq -e --arg ref "$scan_ref" \
+            '(.Metadata.RepoDigests // []) | index($ref) != null' \
+            "$trivy_dir/reports/trivy-report.json" >/dev/null
 
       - name: Remove temporary VEX credentials
         if: ${{ always() && steps.trivy-config.outputs.vex_config != '' }}
