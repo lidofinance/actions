@@ -299,10 +299,6 @@ Findings remaining after VEX filtering are handled as follows:
 | `dev` | Warning; publication continues | Warning; publication continues |
 | `staging`, `prod`, `critical` | Publication blocked | Warning; publication continues |
 
-`TRIVY_APPLICATION_LIBRARIES_REPORT_ONLY` in the workflow file is `"false"`:
-every CRITICAL finding blocks. With `"true"`, CRITICAL findings in libraries
-inside the image `WORKDIR` are only reported.
-
 Findings without an available fix are also reported. The JSON report is uploaded
 before summarizing. VEX-suppressed findings are retained separately through
 `--show-suppressed` and excluded from the active severity counts.
@@ -330,14 +326,11 @@ fatal.
 #### Dependency scanning (Socket)
 
 Before the image is built, the `socket` job scans the dependency manifests of
-the validated commit (`socketdev-release-scan.yml`). `publish` starts only
-after it. The job needs the organization secret `SOCKET_SECURITY_API_KEY`.
+the validated commit (`socketdev-release-scan.yml`). The job needs the
+organization secret `SOCKET_SECURITY_API_KEY`.
 
-| Verdict | `dev` | `staging`, `prod`, `critical` |
-| --- | --- | --- |
-| `pass` | Publication continues | Publication continues |
-| `block` | Warning; publication continues | Publication blocked |
-| `not-scanned` | Warning; publication continues | Publication blocked |
+The job is report-only for now: the verdict (`pass`, `block`, `not-scanned`) is
+shown in the job summary and publication continues in every case.
 
 #### Release preflight and partial-failure recovery
 

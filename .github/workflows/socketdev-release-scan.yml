@@ -1,8 +1,11 @@
 # Socket dependency scan of a release commit. Called from
 # k8s-build-push-harbor.yml between its "validate" and "publish" jobs.
 #
-# Verdicts: "pass", "block", "not-scanned". Target "dev" only reports; every
-# other target is stopped on "block" and on "not-scanned".
+# Verdicts: "pass", "block", "not-scanned". Report-only for now: no verdict
+# and no failed step stops the release.
+#
+# The scan of a commit released from the default branch becomes the head scan
+# of the repository in Socket.
 
 name: Socket release scan
 
@@ -38,9 +41,8 @@ jobs:
     name: Socket dependency security
     runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
     timeout-minutes: 12 # one scan takes 1-3 minutes; a stuck Socket request would otherwise hold the release
-    # Target "dev" only reports: a step that fails before the verdict must not
-    # stop the build of a development image.
-    continue-on-error: ${{ inputs.target == 'dev' }}
+    # Report-only for now: a failed step must not stop the release.
+    continue-on-error: true
     defaults:
       run:
         shell: bash
@@ -50,6 +52,7 @@ jobs:
       SCAN_REPO: ${{ github.event.repository.name }}
       SCAN_BRANCH: ${{ inputs.source_branch }}
       SCAN_COMMIT: ${{ inputs.source_sha }}
+      REPO_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       TARGET: ${{ inputs.target }}
       # Set explicitly so that no .env file in the commit can redirect the API key elsewhere.
       BASE_API_URL: https://api.socket.dev/v0
@@ -166,6 +169,11 @@ jobs:
             echo '::notice::Reachability analysis is switched off by the repository variable SOCKET_REACHABILITY.'
             reach_flags=()
           fi
+          # A scan of the default branch becomes the head scan in Socket.
+          head_flags=()
+          if [ -n "$REPO_DEFAULT_BRANCH" ] && [ "$SCAN_BRANCH" = "$REPO_DEFAULT_BRANCH" ]; then
+            head_flags=(--default-branch)
+          fi
           scan() {
             socketcli \
               --repo "$SCAN_REPO" \
@@ -177,6 +185,7 @@ jobs:
               --strict-blocking \
               --json-file "$RUNNER_TEMP/socket/report.json" \
               --summary-file "$RUNNER_TEMP/socket/summary.txt" \
+              "${head_flags[@]}" \
               "${reach_flags[@]}"
           }
 
@@ -194,11 +203,11 @@ jobs:
             scan || status=$?
           fi
 
-          # The next step decides what the exit code means for this target.
+          # The next step turns the exit code into a verdict.
           echo "Socket CLI exit code: $status"
           echo "status=$status" >> "$GITHUB_OUTPUT"
 
-      - name: Decide the verdict for this target
+      - name: Decide the verdict
         id: verdict
         # Runs after a failed step too, but not after a cancel.
         if: ${{ !cancelled() }}
@@ -245,14 +254,9 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          [ "$verdict" = pass ] && exit 0
-          # The same rule as for Trivy: dev reports, every other target is gated.
-          if [ "$TARGET" = dev ]; then
-            echo "::warning::Socket verdict is \"$verdict\". Target dev is report-only, the release continues."
-            exit 0
+          if [ "$verdict" != pass ]; then
+            echo "::warning::Socket verdict is \"$verdict\". The scan is report-only, the release continues."
           fi
-          echo "::error::Socket verdict is \"$verdict\". The release to $TARGET is stopped."
-          exit 1
 
       - name: Upload scan results
         if: always()

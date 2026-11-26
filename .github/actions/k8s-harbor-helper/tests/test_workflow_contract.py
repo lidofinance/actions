@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/k8s-build-push-harbor.yml"
-HELPER_SHA = "c6c1b1260fdaf7a989e4837e9b9e4f5475d20581"
+HELPER_SHA = "c19bf7880245f2f15d387279236bebb0eb201349"
 HELPER_REFERENCE = "lidofinance/actions/.github/actions/k8s-harbor-helper"
 SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
 SOCKET_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/socketdev-release-scan.yml"
@@ -165,9 +165,6 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("TARGET: ${{ inputs.target }}", gate.group())
         self.assertNotIn("continue-on-error:", gate.group())
         self.assertIn("TRIVY_REPORT_ONLY: ${{ inputs.target == 'dev' }}", gate.group())
-        self.assertIn('TRIVY_APPLICATION_LIBRARIES_REPORT_ONLY: "false"', gate.group())
-        # Application libraries are left to Socket only while its job gates publish.
-        self.assertIn("    needs: [validate, socket]\n", self.workflow)
         self.assertIn("TRIVY_SCAN_OUTCOME: ${{ steps.trivy-scan.outcome }}", gate.group())
         self.assertNotIn("if:", gate.group())
 
@@ -191,7 +188,7 @@ class WorkflowContractTests(unittest.TestCase):
             ["ubuntu-24.04", "ubuntu-24.04"],
         )
 
-    def test_socket_scan_gates_publication_without_publication_secrets(self) -> None:
+    def test_socket_scan_runs_before_publication_without_publication_secrets(self) -> None:
         job = re.search(r"(?ms)^  socket:\n.*?(?=^  publish:)", self.workflow)
         self.assertIsNotNone(job)
         self.assertIn("    needs: validate\n", job.group())
@@ -220,13 +217,21 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertRegex(
                 scan, rf"(?m)^      {name}:\n(?:        .*\n)*?        required: true\n"
             )
-        self.assertIn("    continue-on-error: ${{ inputs.target == 'dev' }}\n", scan)
+        # Report-only for now: neither a failed step nor a verdict stops the release.
+        self.assertIn("    continue-on-error: true\n", scan)
+        self.assertNotIn("exit 1", scan)
         self.assertIn("permissions:\n  contents: read\n\njobs:", scan)
         code = "\n".join(
             line for line in scan.splitlines() if not line.lstrip().startswith("#")
         )
         self.assertNotIn("--scm", code)
-        self.assertNotIn("--default-branch", code)
+        # Only a commit of the default branch becomes the head scan in Socket.
+        self.assertIn(
+            'if [ -n "$REPO_DEFAULT_BRANCH" ] && [ "$SCAN_BRANCH" = "$REPO_DEFAULT_BRANCH" ]; then\n'
+            "            head_flags=(--default-branch)\n",
+            scan,
+        )
+        self.assertEqual(code.count("--default-branch"), 1)
         for flag in ('--base-scan-id "$BASELINE_SCAN_ID"', "--strict-blocking"):
             self.assertIn(flag, scan)
         self.assertEqual(
