@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = REPOSITORY_ROOT / ".github/workflows/k8s-build-push-harbor.yml"
-HELPER_SHA = "c19bf7880245f2f15d387279236bebb0eb201349"
+HELPER_SHA = "7ffc0136e460b5c66d8c9f84b2f2a89dedd0366a"
 HELPER_REFERENCE = "lidofinance/actions/.github/actions/k8s-harbor-helper"
 SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
 SOCKET_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/socketdev-release-scan.yml"
@@ -135,6 +135,14 @@ class WorkflowContractTests(unittest.TestCase):
         )
 
     def test_vex_is_loaded_from_the_pinned_helper_and_downloaded_before_scanning(self) -> None:
+        scan = re.search(
+            r"(?ms)^      - name: Scan Docker image with Trivy.*?(?=^      - name:)",
+            self.workflow,
+        ).group()
+        self.assertNotIn("VEX_REPO_READ_TOKEN", self.workflow)
+        self.assertIn("--env GITHUB_TOKEN=", scan)
+        self.assertNotIn("secrets.", scan)
+        self.assertNotIn("outputs.token", scan)
         self.assertIn(
             "VEX_CONFIG: ${{ steps.trivy-config.outputs.vex_config }}", self.workflow
         )
@@ -147,6 +155,36 @@ class WorkflowContractTests(unittest.TestCase):
             self.workflow.index("vex repo download"),
             self.workflow.index("--vex repo"),
         )
+
+    def test_vex_app_token_is_scoped_and_used_in_the_publish_job(self) -> None:
+        mint = re.search(
+            r"(?ms)^      - name: Create Lido VEX repository token.*?(?=^      - name:)",
+            self.workflow,
+        ).group()
+        for setting in (
+            "uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "client-id: ${{ secrets.VEX_APP_ID }}",
+            "private-key: ${{ secrets.VEX_APP_PRIVATE_KEY }}",
+            "owner: lidofinance", "repositories: vex", "permission-contents: read",
+        ):
+            self.assertIn(setting, mint)
+        self.assertNotIn("skip-token-revoke:", mint)
+        prepare = re.search(
+            r"(?ms)^      - name: Prepare trusted Trivy VEX configuration.*?(?=^      - name:)",
+            self.workflow,
+        ).group()
+        self.assertIn("if: ${{ steps.vex-token.outcome == 'success' }}", prepare)
+        self.assertIn("RUNNER_TEMP: ${{ runner.temp }}", prepare)
+        self.assertIn("VEX_REPO_TOKEN: ${{ steps.vex-token.outputs.token }}", prepare)
+        self.assertLess(self.workflow.index("  publish:"), self.workflow.index(mint))
+        self.assertLess(self.workflow.index(mint), self.workflow.index(prepare))
+        cleanup = re.search(
+            r"(?ms)^      - name: Remove temporary VEX credentials.*?(?=^      - name:)",
+            self.workflow,
+        ).group()
+        self.assertIn("always() && steps.trivy-config.outputs.vex_config != ''", cleanup)
+        self.assertLess(self.workflow.index("      - name: Scan Docker image with Trivy"), self.workflow.index(cleanup))
+        self.assertLess(self.workflow.index(cleanup), self.workflow.index("      - name: Upload Trivy vulnerability report"))
 
     def test_vulnerability_report_runs_after_upload_and_before_harbor_login(self) -> None:
         self.assertLess(
@@ -326,6 +364,7 @@ class WorkflowContractTests(unittest.TestCase):
             "Check DHI base images and approved exceptions",
             "Login to DHI registry",
             "Login to Docker Hub for Lido DHI",
+            "Create Lido VEX repository token",
             "Prepare trusted Trivy VEX configuration",
             "Scan Docker image with Trivy",
             "Upload Trivy vulnerability report",
@@ -334,7 +373,7 @@ class WorkflowContractTests(unittest.TestCase):
         for block in re.split(r"(?m)^      - name: ", self.workflow)[1:]:
             if "continue-on-error:" in block:
                 name = block.splitlines()[0]
-                if name in {"Prepare trusted Trivy VEX configuration", "Scan Docker image with Trivy"}:
+                if name in {"Create Lido VEX repository token", "Prepare trusted Trivy VEX configuration", "Scan Docker image with Trivy"}:
                     self.assertIn("continue-on-error: ${{ inputs.target == 'dev' }}", block)
                 else:
                     self.assertIn("continue-on-error: true", block)
@@ -399,7 +438,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_expressions_are_not_interpolated_inside_shell(self) -> None:
         blocks = run_blocks(self.workflow)
-        self.assertEqual(len(blocks), 2)
+        self.assertEqual(len(blocks), 3)
         for block in blocks:
             self.assertNotIn("${{", block)
 
