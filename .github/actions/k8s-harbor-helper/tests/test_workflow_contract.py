@@ -217,15 +217,13 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertRegex(
                 scan, rf"(?m)^      {name}:\n(?:        .*\n)*?        required: true\n"
             )
-        # Report-only for now: neither a failed step nor a verdict stops the release.
-        self.assertIn("    continue-on-error: true\n", scan)
+        self.assertIn("    continue-on-error: true # report-only for now\n", scan)
         self.assertNotIn("exit 1", scan)
         self.assertIn("permissions:\n  contents: read\n\njobs:", scan)
         code = "\n".join(
             line for line in scan.splitlines() if not line.lstrip().startswith("#")
         )
         self.assertNotIn("--scm", code)
-        # Only a commit of the default branch becomes the head scan in Socket.
         self.assertIn(
             'if [ -n "$REPO_DEFAULT_BRANCH" ] && [ "$SCAN_BRANCH" = "$REPO_DEFAULT_BRANCH" ]; then\n'
             "            head_flags=(--default-branch)\n",

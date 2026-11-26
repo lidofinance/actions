@@ -326,11 +326,8 @@ fatal.
 #### Dependency scanning (Socket)
 
 Before the image is built, the `socket` job scans the dependency manifests of
-the validated commit (`socketdev-release-scan.yml`). The job needs the
-organization secret `SOCKET_SECURITY_API_KEY`.
-
-The job is report-only for now: the verdict (`pass`, `block`, `not-scanned`) is
-shown in the job summary and publication continues in every case.
+the validated commit (`socketdev-release-scan.yml`) and shows the result in the
+job summary.
 
 #### Release preflight and partial-failure recovery
 

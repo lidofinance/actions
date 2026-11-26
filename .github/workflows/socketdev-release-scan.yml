@@ -1,11 +1,7 @@
 # Socket dependency scan of a release commit. Called from
 # k8s-build-push-harbor.yml between its "validate" and "publish" jobs.
 #
-# Verdicts: "pass", "block", "not-scanned". Report-only for now: no verdict
-# and no failed step stops the release.
-#
-# The scan of a commit released from the default branch becomes the head scan
-# of the repository in Socket.
+# Verdicts: "pass", "block", "not-scanned". Report-only for now.
 
 name: Socket release scan
 
@@ -26,8 +22,7 @@ on:
         type: string
     secrets:
       SOCKET_SECURITY_API_KEY:
-        description: Socket API key of the organization
-        required: false # a missing key gives the verdict "not-scanned" instead of a failed call
+        required: false
     outputs:
       verdict:
         description: pass, block, or not-scanned
@@ -40,9 +35,8 @@ jobs:
   scan:
     name: Socket dependency security
     runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
-    timeout-minutes: 12 # one scan takes 1-3 minutes; a stuck Socket request would otherwise hold the release
-    # Report-only for now: a failed step must not stop the release.
-    continue-on-error: true
+    timeout-minutes: 12
+    continue-on-error: true # report-only for now
     defaults:
       run:
         shell: bash
@@ -54,7 +48,6 @@ jobs:
       SCAN_COMMIT: ${{ inputs.source_sha }}
       REPO_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       TARGET: ${{ inputs.target }}
-      # Set explicitly so that no .env file in the commit can redirect the API key elsewhere.
       BASE_API_URL: https://api.socket.dev/v0
       # The reachability engine (Coana CLI). Update together with the CLI lock file.
       REACH_ENGINE_VERSION: 15.15.2
@@ -101,8 +94,6 @@ jobs:
           # Placeholder manifest for an empty scan.
           echo '{"components": []}' > .socket.facts.json
 
-          # curl reads the API key from stdin, so the key never appears in a
-          # process argument list.
           socket_api() {
             printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
               curl -fsS --max-time 60 -K - "$@"
@@ -137,7 +128,6 @@ jobs:
           persist-credentials: false
 
       - name: Fail when the commit contains a reachability facts file
-        # Only this workflow may produce a reachability facts file.
         working-directory: candidate
         run: |
           found="$(find . -path ./.git -prune -o \( -type f -o -type l \) -name '.socket.facts.json*' -print)"
@@ -155,7 +145,6 @@ jobs:
           SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
           BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
           REACHABILITY: ${{ vars.SOCKET_REACHABILITY }}
-          # Never run package install scripts in this step.
           NPM_CONFIG_IGNORE_SCRIPTS: 'true'
         run: |
           # The reachability flags are kept apart: the second attempt below runs
@@ -196,7 +185,6 @@ jobs:
           if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ] && [ "${#reach_flags[@]}" -gt 0 ]; then
             echo '::warning::The first scan attempt produced no report. Scanning again without reachability analysis.'
             touch "$RUNNER_TEMP/socket/reachability-fallback"
-            # Drop what the failed analysis left behind, so the second scan does not upload it.
             find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
             reach_flags=()
             status=0
@@ -217,8 +205,6 @@ jobs:
         run: |
           report="$RUNNER_TEMP/socket/report.json"
 
-          # Counts as scanned only when the report links a comparison with the
-          # baseline scan of this run.
           compared=false
           if [ -n "$BASELINE_SCAN_ID" ] && [ -s "$report" ] &&
             [[ "$(jq -r '.diff_url' "$report")" == *"/diff/$BASELINE_SCAN_ID/"* ]]; then
