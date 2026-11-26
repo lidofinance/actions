@@ -6,9 +6,11 @@
 #
 # Four things here are not obvious:
 #
-# 1. Empty baseline scan. Socket Python CLI 2.11.13 gates and comments only on
-#    findings that are new between two scans. Each run compares the PR with its
-#    own empty scan, so every finding is new and the whole snapshot is reported.
+# 1. Empty baseline scan. Each run compares the PR with its own empty scan, so
+#    every finding is new and the whole snapshot is reported. Compared with the
+#    head scan of the default branch, Socket Python CLI 2.13.2 leaves out the
+#    findings of packages it counts as updated or replaced, even with
+#    --strict-blocking.
 # 2. EVENT_ACTION=synchronize. The CLI skips the scan and exits 0 on a reopened
 #    PR. Forcing one supported action keeps every PR event on the same scan path.
 # 3. Reachability with a fallback. The scan runs with --reach, which lowers
@@ -17,8 +19,8 @@
 #    setting the repository variable SOCKET_REACHABILITY to "off".
 # 4. merge_group fails on purpose: the CLI has no merge queue mode.
 #
-# Scan step exit codes: 0 = no Block (Warn is allowed), 1 = Block, 3 = Socket API
-# or runtime error.
+# Scan step exit codes: 0 = no Block (Warn is allowed), 1 = Block, 2 = invalid
+# CLI flags, 3 = Socket API or runtime error, a missing token included.
 
 name: Socket
 
@@ -50,12 +52,12 @@ jobs:
       # Set explicitly so that no .env file in the PR can redirect the API key elsewhere.
       BASE_API_URL: https://api.socket.dev/v0
       # The reachability engine (Coana CLI). Update together with the CLI lock file.
-      REACH_ENGINE_VERSION: 15.14.2
+      REACH_ENGINE_VERSION: 15.15.2
     steps:
       - name: Fail on merge queue events (not supported yet)
         if: github.event_name == 'merge_group'
         run: |
-          echo '::error::Socket Python CLI 2.11.13 cannot scan merge_group events. Add merge queue support before enforcing this workflow on repositories that use a merge queue.'
+          echo '::error::Socket Python CLI 2.13.2 cannot scan merge_group events. Add merge queue support before enforcing this workflow on repositories that use a merge queue.'
           exit 2
 
       - name: Check out the scanner lock file from the central repository
@@ -125,7 +127,6 @@ jobs:
             exit 3
           fi
           echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
-          echo "org=$org" >> "$GITHUB_OUTPUT"
 
       - name: Check out the PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -216,13 +217,12 @@ jobs:
           exit "$status"
 
       - name: Confirm that Socket compared the scan with the empty baseline
-        # A green scan step is not enough: the CLI exits 0 when it skips the
-        # comparison. Runs after a Block failure too, but not after a cancel.
+        # A green scan step is not enough: the CLI exits 0 when it skips the scan
+        # or creates a plain full scan, and it never blocks on one. Runs after a
+        # Block failure too, but not after a cancel.
         if: github.event_name == 'pull_request' && !cancelled()
         env:
           BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
-          SOCKET_ORG: ${{ steps.baseline.outputs.org }}
-          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
         run: |
           report="$RUNNER_TEMP/socket/report.json"
           not_scanned() {
@@ -235,28 +235,15 @@ jobs:
           [ -s "$report" ] ||
             not_scanned 'the CLI wrote no report'
 
-          # Ask Socket for the comparison itself. The CLI report does not say
-          # whether a comparison was made or whether it was complete: a plain
-          # full scan also leaves a report, and the CLI never blocks on one.
-          # Both answers are kept next to the report and uploaded with it. curl
-          # retries timeouts and 408/429/5xx answers, not 401/403/404.
-          socket_api() {
-            printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
-              curl -fsS --max-time 60 --retry 2 --retry-delay 5 -K - "$@"
-          }
-          head_scan="$(jq -r '.full_scan_id' "$report")"
-          comparisons="$RUNNER_TEMP/socket/comparison-list.json"
-          comparison="$RUNNER_TEMP/socket/comparison.json"
-
-          socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans?before_full_scan_id=$BASELINE_SCAN_ID&after_full_scan_id=$head_scan" > "$comparisons" ||
-            not_scanned 'Socket did not list the comparison'
-          comparison_id="$(jq -r 'if (.results | length) == 1 then .results[0].id else empty end' "$comparisons")"
-          [ -n "$comparison_id" ] ||
-            not_scanned 'Socket has no single comparison of this scan with the empty baseline scan'
-          socket_api "$BASE_API_URL/orgs/$SOCKET_ORG/diff-scans/$comparison_id?if_cached=true" > "$comparison" ||
-            not_scanned 'Socket did not return the comparison'
-          jq -e '.diff_scan.incomplete == false' "$comparison" > /dev/null ||
-            not_scanned 'Socket did not confirm that the comparison is complete'
+          # The report holds a link to the result in Socket. Its form tells what the CLI did:
+          #   compared two scans:       .../diff/<baseline scan>/<PR scan>
+          #   one scan, no comparison:  .../sbom/<PR scan>
+          # Only the first form, with our baseline scan in it, counts as scanned.
+          # (When Socket marks a comparison incomplete, the CLI itself exits 3.)
+          result_link="$(jq -r '.diff_url' "$report")"
+          if [[ "$result_link" != *"/diff/$BASELINE_SCAN_ID/"* ]]; then
+            not_scanned 'the CLI did not compare this scan with the empty baseline scan'
+          fi
 
       - name: Publish the job summary
         if: always()
