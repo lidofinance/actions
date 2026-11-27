@@ -180,6 +180,26 @@ Both logins are best-effort during rollout, so missing or invalid DHI credential
 do not prevent non-DHI builds. A DHI base that requires authentication can still
 fail the actual Docker build when credentials are absent or invalid.
 
+Applications whose build reads private sources can set the optional secret
+`BUILD_SECRETS`, one `id=value` per line with single-line values, in their
+target Environment. Set it only as an Environment secret: a repository or
+organization secret with this name reaches every target. The workflow masks
+each value in the logs and passes the secret to the Docker build as BuildKit
+secrets, which the Dockerfile reads with `RUN --mount=type=secret,id=<id>`.
+The build record artifact upload is turned off for this step, because that
+artifact holds raw build logs that log masking does not cover.
+
+The Dockerfile and every command it runs, dependency install scripts
+included, can read these values and send them out of the build, and log
+masking does not hide encoded or transformed output. BuildKit keeps the mount
+out of image layers and history, but a value that a build command writes to a
+file or bakes into its output ends up in the image. Use read-only credentials
+scoped to what the build needs, separate values per target, and mount each
+secret only in the `RUN` that needs it. Anyone who can get a commit built for
+a target can read that target's `BUILD_SECRETS`, and the secret ids appear in
+the job summary. Use long random values: a short value makes a poor log mask.
+Without `BUILD_SECRETS`, the build runs as before.
+
 The isolated context does not include Git submodule contents. Applications that
 need submodules in the Docker build require additional workflow support.
 

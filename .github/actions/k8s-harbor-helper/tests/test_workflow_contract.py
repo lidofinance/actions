@@ -1,4 +1,7 @@
+import os
 import re
+import shutil
+import subprocess
 import textwrap
 import unittest
 from pathlib import Path
@@ -349,6 +352,71 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(self.workflow.count("secrets.DHI_TOKEN"), 2)
         self.assertEqual(self.workflow.count("secrets.DHI_USERNAME"), 2)
 
+    def test_build_secrets_reach_only_the_mask_and_build_steps(self) -> None:
+        mask = re.search(
+            r"(?ms)^      - name: Mask optional build secrets.*?(?=^      - name:)",
+            self.workflow,
+        )
+        build = re.search(
+            r"(?ms)^      - name: Build Docker image without Harbor credentials.*?(?=^      - name:)",
+            self.workflow,
+        )
+        self.assertIsNotNone(mask)
+        self.assertIsNotNone(build)
+        self.assertIn("BUILD_SECRETS: ${{ secrets.BUILD_SECRETS }}", mask.group())
+        self.assertIn("secrets: ${{ secrets.BUILD_SECRETS }}", build.group())
+        self.assertNotIn("HARBOR_", build.group())
+        self.assertLess(mask.start(), build.start())
+        self.assertLess(build.start(), self.workflow.index("name: Login to development Harbor"))
+        self.assertEqual(self.workflow.count("secrets.BUILD_SECRETS"), 2)
+        # Env name, two expressions, two error messages and the shell variable.
+        self.assertEqual(self.workflow.count("BUILD_SECRETS"), 6)
+        self.assertNotRegex(self.workflow, r"secrets\s*\[|toJSON\(\s*secrets")
+        self.assertIn("::add-mask::", mask.group())
+        self.assertIn("set -euo pipefail", mask.group())
+        self.assertNotIn("if:", mask.group().split("run: |")[0])
+        self.assertNotIn("continue-on-error", mask.group())
+        self.assertIn('DOCKER_BUILD_RECORD_UPLOAD: "false"', build.group())
+        self.assertIn("provenance: false", build.group())
+        self.assertNotRegex(build.group(), r"(?m)^\s*cache-to:")
+        self.assertIn("push: false", build.group())
+        self.assertNotRegex(build.group(), r"(?m)^\s*(sbom|attests|outputs|secret-envs|secret-files):")
+        self.assertIn("--scanners vuln", self.workflow)
+
+    def test_build_secrets_mask_loop_masks_every_value(self) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            if os.environ.get("CI"):
+                self.fail("bash is required in CI")
+            self.skipTest("bash is not available")
+        blocks = [b for b in run_blocks(self.workflow) if "BUILD_SECRETS" in b]
+        self.assertEqual(len(blocks), 1)
+        secrets = "api_key=abc%0Adef\r\n\r\nurl=https://x.example/?a=b=c\n"
+        result = subprocess.run(
+            [bash, "-c", blocks[0]],
+            env={**os.environ, "BUILD_SECRETS": secrets},
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(
+            result.stdout.splitlines(),
+            ["::add-mask::abc%250Adef", "::add-mask::https://x.example/?a=b=c"],
+        )
+        bad = subprocess.run(
+            [bash, "-c", blocks[0]],
+            env={**os.environ, "BUILD_SECRETS": "no_value_here\n"},
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("::error::BUILD_SECRETS lines must be id=value", bad.stdout)
+        for value in ("tok   ", " tok", 'x,"y",z'):
+            rejected = subprocess.run(
+                [bash, "-c", blocks[0]],
+                env={**os.environ, "BUILD_SECRETS": f"a={value}\n"},
+                capture_output=True, text=True,
+            )
+            self.assertNotEqual(rejected.returncode, 0, value)
+            self.assertIn("::error::BUILD_SECRETS values must not", rejected.stdout)
+
     def test_trivy_version_is_digest_pinned(self) -> None:
         self.assertIn(
             "TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:"
@@ -378,7 +446,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_expressions_are_not_interpolated_inside_shell(self) -> None:
         blocks = run_blocks(self.workflow)
-        self.assertEqual(len(blocks), 3)
+        self.assertEqual(len(blocks), 4)
         for block in blocks:
             self.assertNotIn("${{", block)
 

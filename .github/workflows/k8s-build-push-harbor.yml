@@ -249,8 +249,35 @@ jobs:
           username: ${{ secrets.DHI_USERNAME }}
           password: ${{ secrets.DHI_TOKEN }}
 
+      - name: Mask optional build secrets
+        shell: bash
+        env:
+          BUILD_SECRETS: ${{ secrets.BUILD_SECRETS }}
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r line; do
+            line="${line%$'\r'}"
+            if [[ -z "$line" ]]; then
+              continue
+            fi
+            if [[ ! "$line" =~ ^[A-Za-z0-9_.-]+=.+$ ]]; then
+              echo "::error::BUILD_SECRETS lines must be id=value, one secret per line"
+              exit 1
+            fi
+            value="${line#*=}"
+            if [[ "$value" =~ ^[[:space:]] || "$value" =~ [[:space:]]$ || "$value" == *',"'* ]]; then
+              echo "::error::BUILD_SECRETS values must not start or end with whitespace or contain a comma followed by a quote"
+              exit 1
+            fi
+            value="${value//'%'/%25}"
+            printf '::add-mask::%s\n' "$value"
+          done <<< "$BUILD_SECRETS"
+
       - name: Build Docker image without Harbor credentials
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: ${{ steps.context.outputs.context_dir }}
           file: ${{ steps.context.outputs.dockerfile }}
@@ -259,6 +286,7 @@ jobs:
           provenance: false
           builder: ${{ steps.buildx.outputs.name }}
           tags: local-build:${{ github.run_id }}-${{ github.run_attempt }}
+          secrets: ${{ secrets.BUILD_SECRETS }}
           build-args: |
             BUILD_VERSION=${{ needs.validate.outputs.image_tag }}
             BUILD_BRANCH=${{ needs.validate.outputs.source_branch }}
