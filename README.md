@@ -421,6 +421,11 @@ Before the image is built, the `socket` job scans the dependency manifests of
 the validated commit (`socketdev-release-scan.yml`) and shows the result in the
 job summary.
 
+The scan becomes the head scan of the repository in Socket only when the commit
+is released from the repository's default branch. A release tag is always
+attributed to `main` or `master`, so in a repository with another default
+branch the release scans do not update the Socket dashboard.
+
 #### Release preflight and partial-failure recovery
 
 Prod/critical preflight rejects an already-published target tag before spending
