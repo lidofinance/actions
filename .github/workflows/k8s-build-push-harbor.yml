@@ -332,6 +332,8 @@ jobs:
 
           docker run "${trivy_args[@]}" "$TRIVY_IMAGE" vex repo download
 
+          # --pkg-types below: "os,library" scans OS packages and libraries;
+          # "os" switches the library scan off.
           docker run "${trivy_args[@]}" \
             --volume "$trivy_dir/image.tar:/input/image.tar:ro" \
             "$TRIVY_IMAGE" image \
@@ -369,6 +371,7 @@ jobs:
           command: summarize-trivy
         env:
           TARGET: ${{ inputs.target }}
+          # "true" reports findings without blocking, for every package type.
           TRIVY_REPORT_ONLY: ${{ inputs.target == 'dev' }}
           TRIVY_SCAN_OUTCOME: ${{ steps.trivy-scan.outcome }}
           TRIVY_REPORT: ${{ runner.temp }}/trivy/reports/trivy-report.json
