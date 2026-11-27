@@ -116,9 +116,22 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           IMAGE_TAG: ${{ steps.config.outputs.image_tag }}
 
+  socket:
+    name: Socket dependency scan
+    needs: validate
+    # Scans the dependency manifests of the validated commit before the build.
+    # Report-only for now: publish starts whatever the result.
+    uses: ./.github/workflows/socketdev-release-scan.yml
+    with:
+      source_sha: ${{ needs.validate.outputs.source_sha }}
+      source_branch: ${{ needs.validate.outputs.source_branch }}
+      target: ${{ inputs.target }}
+    secrets:
+      SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+
   publish:
     name: Build and publish image
-    needs: validate
+    needs: [validate, socket]
     runs-on: ubuntu-24.04
     environment: ${{ needs.validate.outputs.github_environment }}
     outputs:
@@ -319,6 +332,8 @@ jobs:
 
           docker run "${trivy_args[@]}" "$TRIVY_IMAGE" vex repo download
 
+          # When DHI is adopted and Socket becomes the default for libraries,
+          # the "library" package type will be removed from --pkg-types below.
           docker run "${trivy_args[@]}" \
             --volume "$trivy_dir/image.tar:/input/image.tar:ro" \
             "$TRIVY_IMAGE" image \

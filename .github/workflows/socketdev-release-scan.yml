@@ -1,0 +1,274 @@
+# Socket dependency scan of a release commit. Called from
+# k8s-build-push-harbor.yml between its "validate" and "publish" jobs.
+#
+# Verdicts: "pass", "block", "not-scanned". Report-only for now.
+
+name: Socket release scan
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Commit to scan, already validated by the caller
+        required: true
+        type: string
+      source_branch:
+        description: Branch the commit is released from
+        required: true
+        type: string
+      target:
+        description: "Deployment target: dev, staging, prod, or critical"
+        required: true
+        type: string
+    secrets:
+      SOCKET_SECURITY_API_KEY:
+        required: false
+    outputs:
+      verdict:
+        description: pass, block, or not-scanned
+        value: ${{ jobs.scan.outputs.verdict }}
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Socket dependency security
+    runs-on: ubuntu-24.04 # the lock file is pinned to CPython 3.12 / Linux x86_64
+    timeout-minutes: 12
+    continue-on-error: true # report-only for now
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+    env:
+      SCAN_REPO: ${{ github.event.repository.name }}
+      SCAN_BRANCH: ${{ inputs.source_branch }}
+      SCAN_COMMIT: ${{ inputs.source_sha }}
+      REPO_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      TARGET: ${{ inputs.target }}
+      BASE_API_URL: https://api.socket.dev/v0
+      # The reachability engine (Coana CLI). Update together with the CLI lock file.
+      REACH_ENGINE_VERSION: 15.15.2
+    steps:
+      - name: Check out the scanner lock file from the central repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lidofinance/actions
+          # The commit that holds the lock file of Socket Python CLI 2.13.2.
+          # Update it together with the lock file.
+          ref: d582517d791477f5ca5719782b7a49a6af71a9ba
+          path: tooling
+          sparse-checkout: .github/tools
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js for the reachability engine
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22' # the engine needs 22.13 or newer
+
+      - name: Install the hash-pinned Socket CLI
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: \
+            -r tooling/.github/tools/socket-python-cli.lock
+          socketcli --version
+          node --version
+          npm --version
+          uv --version
+
+      - name: Create the empty baseline scan
+        id: baseline
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          : "${SOCKET_SECURITY_API_KEY:?SOCKET_SECURITY_API_KEY is not available to this repository or event}"
+          mkdir -p "$RUNNER_TEMP/socket" "$RUNNER_TEMP/socket-empty"
+          cd "$RUNNER_TEMP/socket-empty"
+
+          # Placeholder manifest for an empty scan.
+          echo '{"components": []}' > .socket.facts.json
+
+          socket_api() {
+            printf 'user = "%s:"\n' "$SOCKET_SECURITY_API_KEY" |
+              curl -fsS --max-time 60 -K - "$@"
+          }
+
+          org="$(socket_api "$BASE_API_URL/organizations" |
+            jq -r '.organizations | to_entries | if length == 1 then .[0].value.slug else empty end')"
+          if [ -z "$org" ]; then
+            echo '::error::The Socket API key must belong to exactly one organization.'
+            exit 3
+          fi
+
+          # tmp=true keeps this service scan out of the Socket dashboard.
+          socket_api -X POST \
+            -F '.socket.facts.json=@.socket.facts.json' \
+            "$BASE_API_URL/orgs/$org/full-scans?repo=$SCAN_REPO&branch=socket-empty-baseline&tmp=true" \
+            > "$RUNNER_TEMP/socket/baseline.json"
+
+          scan_id="$(jq -r '.id // empty' "$RUNNER_TEMP/socket/baseline.json")"
+          if [ -z "$scan_id" ]; then
+            echo '::error::Socket did not return the ID of the empty baseline scan.'
+            exit 3
+          fi
+          echo "scan_id=$scan_id" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fail when the commit contains a reachability facts file
+        working-directory: candidate
+        run: |
+          found="$(find . -path ./.git -prune -o \( -type f -o -type l \) -name '.socket.facts.json*' -print)"
+          [ -z "$found" ] && exit 0
+          while IFS= read -r file; do
+            echo "::error::Reachability facts file committed to the repository: $file"
+          done <<< "$found"
+          echo '::error::Not scanned. Please contact SecOps to investigate the issue.'
+          exit 2
+
+      - name: Scan the release commit
+        id: scan
+        working-directory: candidate
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+          REACHABILITY: ${{ vars.SOCKET_REACHABILITY }}
+          NPM_CONFIG_IGNORE_SCRIPTS: 'true'
+        run: |
+          # The reachability flags are kept apart: the second attempt below runs
+          # the same command without them.
+          reach_flags=(
+            --reach
+            --reach-disable-analytics
+            --reach-version "$REACH_ENGINE_VERSION"
+          )
+          if [ "${REACHABILITY,,}" = off ]; then # any letter case
+            echo '::notice::Reachability analysis is switched off by the repository variable SOCKET_REACHABILITY.'
+            reach_flags=()
+          fi
+          # The head scan in Socket follows one branch: main or master, else
+          # develop, else the default branch of the repository.
+          has_branch() { git show-ref --verify --quiet "refs/remotes/origin/$1"; }
+          head_branch="$REPO_DEFAULT_BRANCH"
+          if has_branch main && ! has_branch master; then
+            head_branch=main
+          elif has_branch master && ! has_branch main; then
+            head_branch=master
+          elif ! has_branch main && has_branch develop; then
+            head_branch=develop
+          fi
+          echo "Head scan branch: ${head_branch:-none}"
+          head_flags=()
+          if [ -n "$head_branch" ] && [ "$SCAN_BRANCH" = "$head_branch" ]; then
+            head_flags=(--default-branch)
+          fi
+          scan() {
+            socketcli \
+              --repo "$SCAN_REPO" \
+              --branch "$SCAN_BRANCH" \
+              --commit-sha "$SCAN_COMMIT" \
+              --target-path . \
+              --base-scan-id "$BASELINE_SCAN_ID" \
+              --ignore-commit-files \
+              --strict-blocking \
+              --json-file "$RUNNER_TEMP/socket/report.json" \
+              --summary-file "$RUNNER_TEMP/socket/summary.txt" \
+              "${head_flags[@]}" \
+              "${reach_flags[@]}"
+          }
+
+          status=0
+          scan || status=$?
+
+          # Exit 3 without a report: scan again without reachability analysis.
+          if [ "$status" -eq 3 ] && [ ! -s "$RUNNER_TEMP/socket/report.json" ] && [ "${#reach_flags[@]}" -gt 0 ]; then
+            echo '::warning::The first scan attempt produced no report. Scanning again without reachability analysis.'
+            touch "$RUNNER_TEMP/socket/reachability-fallback"
+            find . -path ./.git -prune -o -name '.socket.facts.json*' -print0 | xargs -0 rm -f --
+            reach_flags=()
+            status=0
+            scan || status=$?
+          fi
+
+          # The next step turns the exit code into a verdict.
+          echo "Socket CLI exit code: $status"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Decide the verdict
+        id: verdict
+        # Runs after a failed step too, but not after a cancel.
+        if: ${{ !cancelled() }}
+        env:
+          STATUS: ${{ steps.scan.outputs.status }}
+          BASELINE_SCAN_ID: ${{ steps.baseline.outputs.scan_id }}
+        run: |
+          report="$RUNNER_TEMP/socket/report.json"
+
+          compared=false
+          if [ -n "$BASELINE_SCAN_ID" ] && [ -s "$report" ] &&
+            [[ "$(jq -r '.diff_url' "$report")" == *"/diff/$BASELINE_SCAN_ID/"* ]]; then
+            compared=true
+          fi
+
+          if [ "$STATUS" = 1 ]; then
+            verdict=block
+          elif [ "$STATUS" = 0 ] && [ "$compared" = true ]; then
+            verdict=pass
+          else
+            verdict=not-scanned
+          fi
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          echo "compared=$compared" >> "$GITHUB_OUTPUT"
+
+          if [ "$verdict" != pass ]; then
+            echo "::warning::Socket verdict is \"$verdict\". The scan is report-only, the release continues."
+          fi
+
+      - name: Publish the job summary
+        if: ${{ !cancelled() }}
+        env:
+          STATUS: ${{ steps.scan.outputs.status }}
+          VERDICT: ${{ steps.verdict.outputs.verdict }}
+          COMPARED: ${{ steps.verdict.outputs.compared }}
+        run: |
+          {
+            echo "## Socket release scan: $VERDICT"
+            echo
+            echo "Target \`$TARGET\`, commit \`$SCAN_COMMIT\`, Socket CLI exit code \`${STATUS:-none}\`, compared with the empty baseline: \`$COMPARED\`."
+            if [ -e "$RUNNER_TEMP/socket/reachability-fallback" ]; then
+              echo
+              echo 'The scan with reachability analysis produced no report. These findings are reported without it. The reason is in the log of the scan step.'
+            fi
+            echo
+            if [ -s "$RUNNER_TEMP/socket/summary.txt" ]; then
+              echo '```text'
+              # GitHub rejects step summaries above 1 MiB.
+              head -c 900000 "$RUNNER_TEMP/socket/summary.txt"
+              echo
+              echo '```'
+            else
+              echo 'No completed assessment. See the failed step.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload scan results
+        if: always()
+        continue-on-error: true # one caller run may scan the same target more than once
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: socket-release-${{ github.repository_id }}-${{ inputs.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/socket/
+          if-no-files-found: warn
+          retention-days: 30

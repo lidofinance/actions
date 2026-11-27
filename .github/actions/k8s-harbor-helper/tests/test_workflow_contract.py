@@ -9,6 +9,7 @@ WORKFLOW = REPOSITORY_ROOT / ".github/workflows/k8s-build-push-harbor.yml"
 HELPER_SHA = "7ffc0136e460b5c66d8c9f84b2f2a89dedd0366a"
 HELPER_REFERENCE = "lidofinance/actions/.github/actions/k8s-harbor-helper"
 SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
+SOCKET_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/socketdev-release-scan.yml"
 
 
 def run_blocks(workflow: str) -> list[str]:
@@ -223,6 +224,31 @@ class WorkflowContractTests(unittest.TestCase):
             re.findall(r"(?m)^    runs-on: (.+)$", self.workflow),
             ["ubuntu-24.04", "ubuntu-24.04"],
         )
+
+    def test_socket_job(self) -> None:
+        job = re.search(r"(?ms)^  socket:\n.*?(?=^  publish:)", self.workflow)
+        self.assertIsNotNone(job)
+        self.assertIn("    needs: validate\n", job.group())
+        self.assertIn("    needs: [validate, socket]\n", self.workflow)
+        self.assertIn(
+            "      source_sha: ${{ needs.validate.outputs.source_sha }}\n", job.group()
+        )
+        self.assertEqual(
+            re.findall(r"secrets\.([A-Z_]+)", job.group()), ["SOCKET_SECURITY_API_KEY"]
+        )
+        self.assertNotIn("secrets: inherit", job.group())
+
+    def test_socket_scan_workflow(self) -> None:
+        scan = SOCKET_WORKFLOW.read_text()
+        self.assertIn("permissions:\n  contents: read\n\njobs:", scan)
+        self.assertEqual(
+            set(re.findall(r"secrets\.([A-Z_]+)", scan)), {"SOCKET_SECURITY_API_KEY"}
+        )
+        self.assertRegex(
+            scan, r"repository: lidofinance/actions\n(?:          #.*\n)*          ref: [0-9a-f]{40}\n"
+        )
+        for block in run_blocks(scan):
+            self.assertNotIn("${{", block)
 
     def test_trivy_scans_an_archive_without_daemon_or_runner_temp_access(self) -> None:
         self.assertNotIn("docker.sock", self.workflow)

@@ -415,6 +415,16 @@ Harbor block under this CRITICAL-only policy.
 Source validation, build failures, Harbor login, anti-rollback, and push remain
 fatal.
 
+#### Dependency scanning (Socket)
+
+Before the image is built, the `socket` job scans the dependency manifests of
+the validated commit (`socketdev-release-scan.yml`) and shows the result in the
+job summary.
+
+The scan becomes the head scan of the repository in Socket only when the commit
+is released from `main` or `master`, whichever exists; without them from
+`develop`; otherwise from the repository's default branch.
+
 #### Release preflight and partial-failure recovery
 
 Prod/critical preflight rejects an already-published target tag before spending
