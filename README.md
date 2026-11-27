@@ -422,9 +422,8 @@ the validated commit (`socketdev-release-scan.yml`) and shows the result in the
 job summary.
 
 The scan becomes the head scan of the repository in Socket only when the commit
-is released from the repository's default branch. A release tag is always
-attributed to `main` or `master`, so in a repository with another default
-branch the release scans do not update the Socket dashboard.
+is released from `main` or `master`, whichever exists; without them from
+`develop`; otherwise from the repository's default branch.
 
 #### Release preflight and partial-failure recovery
 

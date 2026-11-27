@@ -158,9 +158,20 @@ jobs:
             echo '::notice::Reachability analysis is switched off by the repository variable SOCKET_REACHABILITY.'
             reach_flags=()
           fi
-          # A scan of the default branch becomes the head scan in Socket.
+          # The head scan in Socket follows one branch: main or master, else
+          # develop, else the default branch of the repository.
+          has_branch() { git show-ref --verify --quiet "refs/remotes/origin/$1"; }
+          head_branch="$REPO_DEFAULT_BRANCH"
+          if has_branch main && ! has_branch master; then
+            head_branch=main
+          elif has_branch master && ! has_branch main; then
+            head_branch=master
+          elif ! has_branch main && has_branch develop; then
+            head_branch=develop
+          fi
+          echo "Head scan branch: ${head_branch:-none}"
           head_flags=()
-          if [ -n "$REPO_DEFAULT_BRANCH" ] && [ "$SCAN_BRANCH" = "$REPO_DEFAULT_BRANCH" ]; then
+          if [ -n "$head_branch" ] && [ "$SCAN_BRANCH" = "$head_branch" ]; then
             head_flags=(--default-branch)
           fi
           scan() {
