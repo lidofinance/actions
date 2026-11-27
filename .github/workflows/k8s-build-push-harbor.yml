@@ -332,8 +332,8 @@ jobs:
 
           docker run "${trivy_args[@]}" "$TRIVY_IMAGE" vex repo download
 
-          # --pkg-types below: "os,library" scans OS packages and libraries;
-          # "os" switches the library scan off.
+          # When DHI is adopted and Socket becomes the default for libraries,
+          # the "library" package type will be removed from --pkg-types below.
           docker run "${trivy_args[@]}" \
             --volume "$trivy_dir/image.tar:/input/image.tar:ro" \
             "$TRIVY_IMAGE" image \
