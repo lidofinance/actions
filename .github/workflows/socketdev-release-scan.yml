@@ -219,11 +219,23 @@ jobs:
             verdict=not-scanned
           fi
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          echo "compared=$compared" >> "$GITHUB_OUTPUT"
 
+          if [ "$verdict" != pass ]; then
+            echo "::warning::Socket verdict is \"$verdict\". The scan is report-only, the release continues."
+          fi
+
+      - name: Publish the job summary
+        if: ${{ !cancelled() }}
+        env:
+          STATUS: ${{ steps.scan.outputs.status }}
+          VERDICT: ${{ steps.verdict.outputs.verdict }}
+          COMPARED: ${{ steps.verdict.outputs.compared }}
+        run: |
           {
-            echo "## Socket release scan: $verdict"
+            echo "## Socket release scan: $VERDICT"
             echo
-            echo "Target \`$TARGET\`, commit \`$SCAN_COMMIT\`, Socket CLI exit code \`${STATUS:-none}\`, compared with the empty baseline: \`$compared\`."
+            echo "Target \`$TARGET\`, commit \`$SCAN_COMMIT\`, Socket CLI exit code \`${STATUS:-none}\`, compared with the empty baseline: \`$COMPARED\`."
             if [ -e "$RUNNER_TEMP/socket/reachability-fallback" ]; then
               echo
               echo 'The scan with reachability analysis produced no report. These findings are reported without it. The reason is in the log of the scan step.'
@@ -239,10 +251,6 @@ jobs:
               echo 'No completed assessment. See the failed step.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$verdict" != pass ]; then
-            echo "::warning::Socket verdict is \"$verdict\". The scan is report-only, the release continues."
-          fi
 
       - name: Upload scan results
         if: always()
